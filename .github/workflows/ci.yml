@@ -5,9 +5,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: ['**'] # main
+    branches: [main, master] # '**' for all branches
   pull_request:
-    branches: ['**'] # main
+    branches: [main, master] # '**' for all branches
 
 jobs:
   build:
@@ -47,7 +47,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: [build, test, analysis]
-    # if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'  # Temporarily disabled for testing
+    # deploy only on main or master branch
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
     steps:
       - uses: actions/download-artifact@v4
         with:
