@@ -1,7 +1,8 @@
 import { render, screen } from '@testing-library/react';
-import App from './App';
+import '@testing-library/jest-dom';
+import App from '../App';
 
-test('renders learn react link', () => {
+test('app displays a link to learn React - should exist = pass', () => {
   render(<App />);
   const linkElement = screen.getByText(/learn react/i);
   expect(linkElement).toBeInTheDocument();
