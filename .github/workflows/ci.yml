@@ -4,9 +4,15 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
+    paths-ignore:
+        - 'docx/**'
+        - '**.md'
   pull_request:
-    branches: [main, master]
+    branches: [main]
+    paths-ignore:
+        - 'docx/**'
+        - '**.md'
 
 jobs:
   build:
