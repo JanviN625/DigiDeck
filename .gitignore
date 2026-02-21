@@ -14,9 +14,6 @@
 # vercel
 .vercel
 
-# local SSL certificates
-/certs
-
 # misc
 .DS_Store
 .env

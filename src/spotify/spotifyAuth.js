@@ -1,14 +1,19 @@
+import FirebaseService from '../firebase/FirebaseService';
+
 const CLIENT_ID = process.env.REACT_APP_SPOTIFY_CLIENT_ID;
 const REDIRECT_URI = process.env.REACT_APP_SPOTIFY_REDIRECT_URI;
 
-const SCOPE = 'user-read-private user-read-email';
+const SCOPE = 'user-read-private user-read-email'; // Definitely need more scopes, add later
 
 const KEYS = {
   ACCESS_TOKEN: 'access_token',
   CODE_VERIFIER: 'code_verifier',
+  EXPIRES_AT: 'spotify_expires_at',
+  USER_ID: 'spotify_user_id',
 };
 
-// --- PKCE helpers (per Spotify docs) ---
+// Helper functions for PKCE flow (Spotify docs)
+// https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow
 
 const generateRandomString = (length) => {
   const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -29,9 +34,16 @@ const base64encode = (input) => {
     .replace(/\//g, '_');
 };
 
-// --- Public API ---
-
 export async function initiateLogin() {
+  if (!CLIENT_ID) {
+    console.error('REACT_APP_SPOTIFY_CLIENT_ID is undefined.');
+    return;
+  }
+  if (!REDIRECT_URI) {
+    console.error('REACT_APP_SPOTIFY_REDIRECT_URI is undefined.');
+    return;
+  }
+
   const codeVerifier = generateRandomString(64);
   const hashed = await sha256(codeVerifier);
   const codeChallenge = base64encode(hashed);
@@ -64,17 +76,15 @@ export async function handleCallback() {
   if (!code) return false;
 
   const codeVerifier = localStorage.getItem(KEYS.CODE_VERIFIER);
+
   if (!codeVerifier) {
-    console.error('[Spotify Auth] Code verifier missing — cannot complete login.');
+    console.error('[Spotify Auth] Code verifier missing (login and callback origins must match -> 127.0.0.1 not localhost).');
     return false;
   }
 
-  const url = 'https://accounts.spotify.com/api/token';
-  const payload = {
+  const tokenRes = await fetch('https://accounts.spotify.com/api/token', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       client_id: CLIENT_ID,
       grant_type: 'authorization_code',
@@ -82,29 +92,94 @@ export async function handleCallback() {
       redirect_uri: REDIRECT_URI,
       code_verifier: codeVerifier,
     }),
-  };
+  });
 
-  const body = await fetch(url, payload);
-
-  if (!body.ok) {
-    const err = await body.json();
-    console.error('[Spotify Auth] Token exchange failed:', err);
+  if (!tokenRes.ok) {
+    console.error('[Spotify Auth] Token exchange failed:', await tokenRes.json());
     return false;
   }
 
-  const response = await body.json();
-  localStorage.setItem(KEYS.ACCESS_TOKEN, response.access_token);
+  const { access_token, refresh_token, expires_in } = await tokenRes.json();
+  const expires_at = Date.now() + expires_in * 1000;
+
+  // Fetch user ID to key Firebase document
+  const profileRes = await fetch('https://api.spotify.com/v1/me', {
+    headers: { Authorization: `Bearer ${access_token}` },
+  });
+
+  if (!profileRes.ok) {
+    console.error('[Spotify Auth] Failed to fetch user ID after token exchange.');
+    return false;
+  }
+
+  const { id: userId } = await profileRes.json();
+
+  await FirebaseService.saveSpotifyToken(userId, { access_token, refresh_token, expires_at });
+
+  localStorage.setItem(KEYS.ACCESS_TOKEN, access_token);
+  localStorage.setItem(KEYS.EXPIRES_AT, String(expires_at));
+  localStorage.setItem(KEYS.USER_ID, userId);
   localStorage.removeItem(KEYS.CODE_VERIFIER);
 
   window.history.replaceState({}, document.title, window.location.pathname);
 
-  console.log('[Spotify Auth] Login successful. Access token stored.');
   return true;
 }
 
+export async function refreshAccessToken() {
+  const userId = localStorage.getItem(KEYS.USER_ID);
+  if (!userId) return null;
+
+  const tokenData = await FirebaseService.getSpotifyToken(userId);
+  if (!tokenData?.refresh_token) return null;
+
+  const res = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: tokenData.refresh_token,
+      client_id: CLIENT_ID,
+    }),
+  });
+
+  if (!res.ok) {
+    console.error('[Spotify Auth] Token refresh failed:', await res.json());
+    return null;
+  }
+
+  const { access_token, refresh_token, expires_in } = await res.json();
+  const expires_at = Date.now() + expires_in * 1000;
+
+  await FirebaseService.saveSpotifyToken(userId, {
+    access_token,
+    refresh_token: refresh_token ?? tokenData.refresh_token,
+    expires_at,
+  });
+
+  localStorage.setItem(KEYS.ACCESS_TOKEN, access_token);
+  localStorage.setItem(KEYS.EXPIRES_AT, String(expires_at));
+
+  return access_token;
+}
+
+export async function getValidAccessToken() {
+  const expiresAt = parseInt(localStorage.getItem(KEYS.EXPIRES_AT), 10);
+  const isExpired = !expiresAt || Date.now() >= expiresAt - 60_000;
+
+  if (isExpired) return refreshAccessToken();
+
+  return localStorage.getItem(KEYS.ACCESS_TOKEN);
+}
+
 export function logout() {
+  const userId = localStorage.getItem(KEYS.USER_ID);
+  if (userId) FirebaseService.deleteSpotifyToken(userId);
+
   localStorage.removeItem(KEYS.ACCESS_TOKEN);
-  console.log('[Spotify Auth] Logout successful. Token cleared.');
+  localStorage.removeItem(KEYS.CODE_VERIFIER);
+  localStorage.removeItem(KEYS.EXPIRES_AT);
+  localStorage.removeItem(KEYS.USER_ID);
 }
 
 export function getAccessToken() {
@@ -113,4 +188,20 @@ export function getAccessToken() {
 
 export function isLoggedIn() {
   return !!getAccessToken();
+}
+
+export async function fetchUserProfile() {
+  const accessToken = await getValidAccessToken();
+  if (!accessToken) return null;
+
+  const response = await fetch('https://api.spotify.com/v1/me', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    console.error('[Spotify Auth] Failed to fetch user profile:', response.status);
+    return null;
+  }
+
+  return response.json();
 }

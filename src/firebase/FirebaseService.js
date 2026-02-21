@@ -44,6 +44,11 @@ const FirebaseService = {
     const ref = doc(db, 'users', spotifyUserId, 'tokens', 'spotify');
     const snapshot = await getDoc(ref);
     return snapshot.exists() ? snapshot.data() : null;
+  },
+
+  async deleteSpotifyToken(spotifyUserId) {
+    const ref = doc(db, 'users', spotifyUserId, 'tokens', 'spotify');
+    await deleteDoc(ref);
   }
 };
 

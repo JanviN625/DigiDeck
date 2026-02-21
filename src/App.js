@@ -2,7 +2,9 @@ import './App.css';
 import { useSpotifyAuth } from './spotify/useSpotifyAuth';
 
 function App() {
-  const { loggedIn, login, logout } = useSpotifyAuth();
+  const { loggedIn, profile, login, logout } = useSpotifyAuth();
+
+  const avatarUrl = profile?.images?.[0]?.url;
 
   return (
     <div className="App">
@@ -11,6 +13,19 @@ function App() {
           {loggedIn ? 'Logout' : 'Login with Spotify'}
         </button>
       </nav>
+
+      {loggedIn && profile && (
+        <div className="profile-card">
+          {avatarUrl && (
+            <img
+              className="profile-avatar"
+              src={avatarUrl}
+              alt={`${profile.display_name}'s avatar`}
+            />
+          )}
+          <p className="profile-name">Logged in as: {profile.display_name}</p>
+        </div>
+      )}
     </div>
   );
 }

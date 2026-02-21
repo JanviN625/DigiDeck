@@ -25,3 +25,24 @@
   background-color: #cc0000;
   color: #ffffff;
 }
+
+.profile-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 80px;
+  gap: 16px;
+}
+
+.profile-avatar {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.profile-name {
+  color: #cccccc;
+  font-size: 18px;
+  margin: 0;
+}
