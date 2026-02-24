@@ -1,38 +1,48 @@
 .App {
-  text-align: center;
-}
-
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
-}
-
-.App-header {
   background-color: #282c34;
   min-height: 100vh;
+}
+
+.navbar {
+  background-color: #1c1f26;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 12px 24px;
+}
+
+.spotify-btn {
+  background-color: #800000;
+  color: #ccc;
+  border: none;
+  padding: 12px 28px;
+  border-radius: 4px;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.spotify-btn:hover {
+  background-color: #cc0000;
+  color: #ffffff;
+}
+
+.profile-card {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
+  margin-top: 80px;
+  gap: 16px;
 }
 
-.App-link {
-  color: #61dafb;
+.profile-avatar {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.profile-name {
+  color: #cccccc;
+  font-size: 18px;
+  margin: 0;
 }

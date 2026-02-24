@@ -1,23 +1,31 @@
-import logo from './logo.svg';
 import './App.css';
+import { useSpotifyAuth } from './spotify/useSpotifyAuth';
 
 function App() {
+  const { loggedIn, profile, login, logout } = useSpotifyAuth();
+
+  const avatarUrl = profile?.images?.[0]?.url;
+
   return (
     <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
+      <nav className="navbar">
+        <button className="spotify-btn" onClick={loggedIn ? logout : login}>
+          {loggedIn ? 'Logout' : 'Login with Spotify'}
+        </button>
+      </nav>
+
+      {loggedIn && profile && (
+        <div className="profile-card">
+          {avatarUrl && (
+            <img
+              className="profile-avatar"
+              src={avatarUrl}
+              alt={`${profile.display_name}'s avatar`}
+            />
+          )}
+          <p className="profile-name">Logged in as: {profile.display_name}</p>
+        </div>
+      )}
     </div>
   );
 }
