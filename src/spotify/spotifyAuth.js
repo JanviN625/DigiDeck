@@ -1,4 +1,6 @@
 import FirebaseService from '../firebase/FirebaseService';
+import { auth } from '../firebase/firebaseConfig';
+import { signInWithCustomToken } from 'firebase/auth';
 
 const CLIENT_ID = process.env.REACT_APP_SPOTIFY_CLIENT_ID;
 const REDIRECT_URI = process.env.REACT_APP_SPOTIFY_REDIRECT_URI;
@@ -113,6 +115,27 @@ export async function handleCallback() {
   }
 
   const { id: userId } = await profileRes.json();
+
+  // ----- Authenticate with Firebase via Custom Token -----
+  try {
+    const authRes = await fetch('/api/authTokenValid', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ spotifyToken: access_token })
+    });
+
+    if (!authRes.ok) {
+      console.error('[Firebase Auth] Failed to get Firebase custom token:', await authRes.text());
+      if (window.location.hostname !== '127.0.0.1') return false;
+    } else {
+      const { firebaseToken } = await authRes.json();
+      await signInWithCustomToken(auth, firebaseToken);
+    }
+  } catch (error) {
+    console.error('[Firebase Auth] Firebase login failed', error);
+    if (window.location.hostname !== '127.0.0.1') return false;
+  }
+  // -------------------------------------------------------
 
   await FirebaseService.saveSpotifyToken(userId, { access_token, refresh_token, expires_at });
 
