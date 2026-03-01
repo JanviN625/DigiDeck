@@ -6,7 +6,15 @@ import MainWorkspace from './components/MainWorkspace';
 import { useSpotifyAuth } from './spotify/useSpotifyAuth';
 
 function App() {
-  const { loggedIn, profile, login, logout } = useSpotifyAuth();
+  const { loggedIn, isLoading, profile, login, logout } = useSpotifyAuth();
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col h-screen w-full bg-base-900 justify-center items-center font-sans">
+        <div className="w-32 h-32 border-8 border-white/20 border-t-white rounded-full animate-spin shadow-lg"></div>
+      </div>
+    );
+  }
 
   if (!loggedIn) {
     return (
