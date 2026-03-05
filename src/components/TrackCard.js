@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, EyeOff, Move, Copy, Trash2, RotateCcw } from 'lucide-react';
 import { getDynamicInputWidth } from '../utils/helpers';
+import { useMix, useSpotify } from '../context/SpotifyContext';
 
 export default function TrackCard({
     initiallyExpanded = false,
@@ -17,19 +18,18 @@ export default function TrackCard({
     initialPitch = 0,
     initialSpeed = 1.0,
     initialFadeIn = "0.0s",
-    initialFadeOut = "0.0s"
+    initialFadeOut = "0.0s",
+    artistName = "[Artist Name]",
+    albumArt = null,
+    bpm = "[BPM]",
+    trackKey = "[key]",
+    spotifyId = null,
+    audioUrl = null
 }) {
     const [isExpanded, setIsExpanded] = useState(initiallyExpanded);
     const [trackName, setTrackName] = useState(title);
     const [isEditing, setIsEditing] = useState(false);
     const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
-
-    // eslint-disable-next-line no-unused-vars
-    const [artistName, setArtistName] = useState("[Name]");
-    // eslint-disable-next-line no-unused-vars
-    const [bpm, setBpm] = useState("[BPM]");
-    // eslint-disable-next-line no-unused-vars
-    const [trackKey, setTrackKey] = useState("[key]");
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
@@ -43,6 +43,59 @@ export default function TrackCard({
     const [isEffectsExpanded, setIsEffectsExpanded] = useState(false);
     const [isDraggable, setIsDraggable] = useState(false);
     const [isDragOver, setIsDragOver] = useState(false);
+
+    const { player, deviceId } = useMix();
+    const { playTrack } = useSpotify();
+
+    // Audio Playback
+    const [progress, setProgress] = useState(0);
+
+    // Sync volume with SDK
+    useEffect(() => {
+        if (player && typeof player.setVolume === 'function' && volume !== undefined) {
+            const vol = isMuted || !isVisible ? 0 : volume / 100;
+            player.setVolume(vol).catch(e => console.error("Failed to set SDK volume", e));
+        }
+    }, [volume, isMuted, isVisible, player]);
+
+    // Handle Local Play/Pause
+    useEffect(() => {
+        if (!player || !deviceId || !spotifyId) return;
+
+        if (isPlaying && isVisible) {
+            playTrack(`spotify:track:${spotifyId}`, deviceId).catch(err => {
+                console.error("Failed to start remote playback:", err);
+                setIsPlaying(false);
+            });
+        } else {
+            player.pause().catch(e => console.error("Failed to pause SDK playback", e));
+        }
+    }, [isPlaying, isVisible]); // Removed spotify dependencies so it doesn't auto-trigger on mount
+
+    // Track Progress from SDK
+    useEffect(() => {
+        if (!player) return;
+
+        const handleStateChange = (state) => {
+            if (!state) return;
+            const currentPosition = state.position;
+            const duration = state.duration;
+            
+            if (duration > 0) {
+                setProgress((currentPosition / duration) * 100);
+            }
+
+            // Sync local pause state if paused externally
+            if (state.paused && isPlaying) {
+                setIsPlaying(false);
+            }
+        };
+
+        player.addListener('player_state_changed', handleStateChange);
+        return () => {
+            player.removeListener('player_state_changed', handleStateChange);
+        };
+    }, [player, isPlaying]);
 
     return (
         <div className="relative">
@@ -170,13 +223,17 @@ export default function TrackCard({
                         <div className="flex gap-4 h-40 w-full mt-2">
                             {/* Track Controls Left Panel */}
                             <div className="flex flex-col w-32 shrink-0 gap-2">
-                                {/* Image Placeholder */}
+                                {/* Image Placeholder / Album Art */}
                                 <div className="w-full flex-1 flex items-center justify-center">
                                     <div
                                         className={`h-full aspect-square bg-base-900 border border-base-700 rounded flex items-center justify-center overflow-hidden transition-colors shadow-sm ${!isVisible ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-base-500'}`}
                                         title={`[${trackName}]`}
                                     >
-                                        <span className="text-xs text-base-300 font-medium select-none">No Art</span>
+                                        {albumArt ? (
+                                             <img src={albumArt} alt={trackName} className="w-full h-full object-cover" />
+                                        ) : (
+                                            <span className="text-xs text-base-300 font-medium select-none">No Art</span>
+                                        )}
                                     </div>
                                 </div>
 
@@ -220,9 +277,11 @@ export default function TrackCard({
                             </div>
 
                             {/* Visualizer Area */}
-                            <div className="flex-1 h-full">
-                                <div className="w-full h-full rounded flex items-center justify-center bg-base-900 border border-base-700 shadow-inner">
-                                    <span className="text-sm text-base-300">Waveform Placeholder Container</span>
+                            <div className="flex-1 h-full relative group/viz">
+                                <div className="w-full h-full rounded flex items-center justify-center bg-base-900 border border-base-700 shadow-inner overflow-hidden relative">
+                                    {/* Progress Overlay */}
+                                    <div className="absolute left-0 top-0 bottom-0 bg-base-500/20 border-r border-base-500 transition-all duration-100" style={{ width: `${progress}%` }}></div>
+                                    <span className="text-sm font-bold text-base-300 z-10 drop-shadow-md mix-blend-difference">{progress > 0 ? "Playing..." : "Ready to Play"}</span>
                                 </div>
                             </div>
                         </div>

@@ -5,7 +5,7 @@ import { signInWithCustomToken } from 'firebase/auth';
 const CLIENT_ID = process.env.REACT_APP_SPOTIFY_CLIENT_ID;
 const REDIRECT_URI = process.env.REACT_APP_SPOTIFY_REDIRECT_URI;
 
-const SCOPE = 'user-read-private user-read-email'; // Definitely need more scopes, add later
+const SCOPE = 'user-read-private user-read-email playlist-read-private playlist-read-collaborative user-library-read streaming user-modify-playback-state user-read-playback-state';
 
 const KEYS = {
   ACCESS_TOKEN: 'access_token',
