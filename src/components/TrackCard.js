@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, EyeOff, Move, Copy, Trash2, RotateCcw } from 'lucide-react';
 import { getDynamicInputWidth } from '../utils/helpers';
-import { useMix, useSpotify } from '../context/SpotifyContext';
 
 export default function TrackCard({
     initiallyExpanded = false,
@@ -44,61 +43,41 @@ export default function TrackCard({
     const [isDraggable, setIsDraggable] = useState(false);
     const [isDragOver, setIsDragOver] = useState(false);
 
-    const { player, deviceId } = useMix();
-    const { playTrack } = useSpotify();
-
-    // Audio Playback
+    const audioRef = useRef(null);
     const [progress, setProgress] = useState(0);
 
-    // Sync volume with SDK
+    // Sync volume with HTML5 audio element
     useEffect(() => {
-        if (player && typeof player.setVolume === 'function' && volume !== undefined) {
-            const vol = isMuted || !isVisible ? 0 : volume / 100;
-            player.setVolume(vol).catch(e => console.error("Failed to set SDK volume", e));
-        }
-    }, [volume, isMuted, isVisible, player]);
+        if (!audioRef.current) return;
+        audioRef.current.volume = isMuted || !isVisible ? 0 : volume / 100;
+    }, [volume, isMuted, isVisible]);
 
-    // Handle Local Play/Pause
+    // Handle play/pause via HTML5 audio preview
     useEffect(() => {
-        if (!player || !deviceId || !spotifyId) return;
-
+        if (!audioRef.current || !audioUrl) return;
         if (isPlaying && isVisible) {
-            playTrack(`spotify:track:${spotifyId}`, deviceId).catch(err => {
-                console.error("Failed to start remote playback:", err);
+            audioRef.current.play().catch(err => {
+                console.error('Preview playback failed:', err);
                 setIsPlaying(false);
             });
         } else {
-            player.pause().catch(e => console.error("Failed to pause SDK playback", e));
+            audioRef.current.pause();
         }
-    }, [isPlaying, isVisible]); // Removed spotify dependencies so it doesn't auto-trigger on mount
-
-    // Track Progress from SDK
-    useEffect(() => {
-        if (!player) return;
-
-        const handleStateChange = (state) => {
-            if (!state) return;
-            const currentPosition = state.position;
-            const duration = state.duration;
-            
-            if (duration > 0) {
-                setProgress((currentPosition / duration) * 100);
-            }
-
-            // Sync local pause state if paused externally
-            if (state.paused && isPlaying) {
-                setIsPlaying(false);
-            }
-        };
-
-        player.addListener('player_state_changed', handleStateChange);
-        return () => {
-            player.removeListener('player_state_changed', handleStateChange);
-        };
-    }, [player, isPlaying]);
+    }, [isPlaying, isVisible]); // eslint-disable-line react-hooks/exhaustive-deps
 
     return (
         <div className="relative">
+            {audioUrl && (
+                <audio
+                    ref={audioRef}
+                    src={audioUrl}
+                    onTimeUpdate={() => {
+                        const a = audioRef.current;
+                        if (a?.duration) setProgress((a.currentTime / a.duration) * 100);
+                    }}
+                    onEnded={() => { setIsPlaying(false); setProgress(0); }}
+                />
+            )}
             {/* Visual Drop Indicators */}
             {isDragOver === 'top' && !isFirst && <div className="absolute -top-[9px] left-0 right-0 h-1 bg-base-500 rounded-full z-50 shadow-[0_0_8px_rgba(var(--tw-colors-base-500))] pointer-events-none"></div>}
             {isDragOver === 'bottom' && !isLast && <div className="absolute -bottom-[9px] left-0 right-0 h-1 bg-base-500 rounded-full z-50 shadow-[0_0_8px_rgba(var(--tw-colors-base-500))] pointer-events-none"></div>}
@@ -155,7 +134,8 @@ export default function TrackCard({
                             <Pencil size={16} />
                         </button>
 
-                        {/* Track Metadata */}
+                        {/* Track Metadata — BPM and Key are placeholders until audio analysis API is integrated */}
+                        {/* TODO: populate bpm and trackKey via a third-party audio analysis API (e.g. AudD, ACRCloud) */}
                         <div className="flex items-center text-xs text-base-400 ml-4 gap-3">
                             <span><span className="text-base-300 font-medium whitespace-nowrap">Artist:</span> <span className="text-base-200">{artistName}</span></span>
                             <div className="w-1 h-1 shrink-0 rounded-full bg-base-600"></div>
@@ -230,7 +210,7 @@ export default function TrackCard({
                                         title={`[${trackName}]`}
                                     >
                                         {albumArt ? (
-                                             <img src={albumArt} alt={trackName} className="w-full h-full object-cover" />
+                                            <img src={albumArt} alt={trackName} className="w-full h-full object-cover" />
                                         ) : (
                                             <span className="text-xs text-base-300 font-medium select-none">No Art</span>
                                         )}
@@ -241,8 +221,9 @@ export default function TrackCard({
                                 <div className="flex justify-between gap-1">
                                     <button
                                         onClick={(e) => { e.stopPropagation(); setIsPlaying(!isPlaying); }}
-                                        disabled={!isVisible}
-                                        className={`flex-1 aspect-square rounded flex items-center justify-center transition-colors border ${!isVisible ? 'bg-base-900 text-base-700 border-base-800 cursor-not-allowed' : isPlaying ? 'bg-base-500 text-base-50 border-base-400' : 'bg-base-900 text-base-300 border-base-700 hover:text-base-50 hover:border-base-500'}`}
+                                        disabled={!isVisible || !audioUrl}
+                                        title={!audioUrl ? 'No preview available' : undefined}
+                                        className={`flex-1 aspect-square rounded flex items-center justify-center transition-colors border ${!isVisible || !audioUrl ? 'bg-base-900 text-base-700 border-base-800 cursor-not-allowed' : isPlaying ? 'bg-base-500 text-base-50 border-base-400' : 'bg-base-900 text-base-300 border-base-700 hover:text-base-50 hover:border-base-500'}`}
                                     >
                                         {isPlaying ? <Pause size={14} /> : <Play size={14} className="ml-0.5" />}
                                     </button>

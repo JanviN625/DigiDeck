@@ -1,39 +1,27 @@
 import React, { useState } from 'react';
 import TrackCard from './TrackCard';
-import TrackSearchModal from './TrackSearchModal';
-import { useMix } from '../context/SpotifyContext';
+import { useMix } from '../spotify/spotifyContext';
 
 export default function MainWorkspace() {
-    const { 
-        tracks, 
-        handleDuplicateTrack, 
-        handleDeleteTrack, 
-        handleReorderTracks 
-    } = useMix();
-
+    const { tracks, handleDuplicateTrack, handleDeleteTrack, handleReorderTracks } = useMix();
     const [draggedIndex, setDraggedIndex] = useState(null);
-    const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
 
     const handleDragStart = (e, index) => {
-        e.dataTransfer.setData("trackIndex", index.toString());
-        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData('trackIndex', index.toString());
+        e.dataTransfer.effectAllowed = 'move';
         setDraggedIndex(index);
     };
 
-    const handleDragEnd = () => {
-        setDraggedIndex(null);
-    };
+    const handleDragEnd = () => setDraggedIndex(null);
 
     const handleDrop = (e, targetIndex, position) => {
-        const dragIndexStr = e.dataTransfer.getData("trackIndex");
+        const dragIndexStr = e.dataTransfer.getData('trackIndex');
         if (!dragIndexStr) return;
-        const dragIndex = parseInt(dragIndexStr, 10);
-        handleReorderTracks(dragIndex, targetIndex, position);
+        handleReorderTracks(parseInt(dragIndexStr, 10), targetIndex, position);
     };
 
     return (
         <main className="flex-1 bg-base-900 p-8 overflow-y-auto">
-
             <div className="space-y-4">
                 {tracks.map((track, index) => (
                     <TrackCard
@@ -61,21 +49,7 @@ export default function MainWorkspace() {
                         audioUrl={track.audioUrl}
                     />
                 ))}
-
-                {tracks.length < 5 && (
-                    <div
-                        onClick={() => setIsSearchModalOpen(true)}
-                        className="mt-8 border-2 border-base-700 border-dashed rounded-lg h-32 flex items-center justify-center hover:bg-base-800 transition-colors cursor-pointer text-base-300 hover:text-base-100 shadow-sm"
-                    >
-                        + Add New Track
-                    </div>
-                )}
             </div>
-
-            <TrackSearchModal 
-                isOpen={isSearchModalOpen} 
-                onClose={() => setIsSearchModalOpen(false)} 
-            />
         </main>
     );
 }

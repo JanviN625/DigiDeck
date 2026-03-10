@@ -1,20 +1,46 @@
 import React, { useState } from 'react';
 import { Pencil } from 'lucide-react';
+import { Avatar, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, DropdownSection } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
+import { useFirebaseAuth } from '../firebase/firebase';
+import { useSpotifyConnect } from '../spotify/spotifyContext';
 
-export default function Header({ profile, logout }) {
-    const [dropdownOpen, setDropdownOpen] = useState(false);
+export default function Header() {
+    const { user, signOut } = useFirebaseAuth();
+    const { isSpotifyConnected, connectSpotify, disconnectSpotify } = useSpotifyConnect();
     const [projectName, setProjectName] = useState('Untitled project');
     const [isEditingProject, setIsEditingProject] = useState(false);
-    const avatarUrl = profile?.images?.[0]?.url;
-    const displayName = profile?.display_name || 'User';
+
+    // Resolve Profile Data
+    const displayName = user?.displayName || user?.email || 'User';
+
+    // Avatar uses Firebase Auth photoURL permanently
+    const avatarSrc = user?.photoURL || null;
+
+    // Custom initials logic: First character and last character before the '@' symbol
+    const CustomInitials = (nameStr) => {
+        if (!nameStr) return '?';
+        const isEmail = nameStr.includes('@');
+        if (isEmail) {
+            const username = nameStr.split('@')[0];
+            if (username.length === 1) return username[0].toUpperCase();
+            return (username[0] + username[username.length - 1]).toUpperCase();
+        }
+        // Non-email fallback (e.g. Google displayName)
+        const parts = nameStr.trim().split(/\s+/);
+        if (parts.length === 1) {
+            if (parts[0].length === 1) return parts[0].toUpperCase();
+            return (parts[0][0] + parts[0][parts[0].length - 1]).toUpperCase();
+        }
+        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    };
 
     return (
         <header className="h-16 bg-base-800 border-b border-base-700 flex items-center justify-between px-6 shrink-0 relative">
             <div className="flex items-center gap-6">
                 <div className="flex items-center gap-3">
                     <img src="/icon.png" alt="DigiDeck Logo" className="w-11 h-11 object-contain drop-shadow-md" />
-                    <div className="font-extrabold text-sm leading-tight tracking-wider text-base-50">
+                    <div className="font-extrabold text-sm leading-tight tracking-wider text-base-50 text-left">
                         <div>DigiDeck</div>
                         <div className="text-base-300 font-bold">Studio</div>
                     </div>
@@ -42,10 +68,7 @@ export default function Header({ profile, logout }) {
                 </div>
             </div>
 
-            <div
-                className="flex gap-4 relative h-full items-center justify-end"
-                onMouseLeave={() => setDropdownOpen(false)}
-            >
+            <div className="flex gap-4 relative h-full items-center justify-end">
                 {/* Secondary Navigation Actions */}
                 <nav className="flex items-center gap-1.5 mr-2">
                     <button className="text-sm font-semibold text-base-300 hover:text-base-50 hover:bg-base-700 px-3 py-1.5 rounded transition-colors tracking-wide">Save</button>
@@ -55,48 +78,64 @@ export default function Header({ profile, logout }) {
                     <button className="text-sm font-bold text-base-50 bg-base-600 hover:bg-base-500 px-4 py-1.5 rounded-full transition-colors tracking-wide border border-base-500 shadow-sm ml-1">Preview Full Mix</button>
                 </nav>
 
-                <div className="relative">
-                    <button
-                        onClick={() => setDropdownOpen(!dropdownOpen)}
-                        className={`w-10 h-10 rounded-full bg-base-700 flex items-center justify-center overflow-hidden border-2 transition-colors focus:outline-none relative z-10 ${dropdownOpen ? 'border-base-500' : 'border-transparent hover:border-base-500'}`}
-                        title="Account profile"
-                    >
-                        {avatarUrl ? (
-                            <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" />
+                <Dropdown
+                    placement="bottom-end"
+                    classNames={{
+                        content: "bg-base-800 border border-base-700 rounded-lg shadow-xl text-base-200 min-w-[200px]"
+                    }}
+                >
+                    <DropdownTrigger>
+                        {avatarSrc ? (
+                            <button className="bg-base-700 border-2 border-transparent hover:border-base-500 transition-colors cursor-pointer rounded-full overflow-hidden w-10 h-10 flex items-center justify-center shrink-0">
+                                <img src={avatarSrc} alt={displayName} className="w-full h-full object-cover" />
+                            </button>
                         ) : (
-                            <span className="font-bold text-lg text-base-50">{displayName[0]?.toUpperCase() || '?'}</span>
+                            <Avatar
+                                as="button"
+                                name={displayName}
+                                getInitials={CustomInitials}
+                                showFallback
+                                classNames={{
+                                    base: "bg-base-700 border-2 border-transparent hover:border-base-500 transition-colors cursor-pointer",
+                                    name: "text-base-50 font-bold"
+                                }}
+                            />
                         )}
-                    </button>
+                    </DropdownTrigger>
 
-                    {dropdownOpen && (
-                        /* Invisible padding area expanding to the left and up to catch mouse travel */
-                        <div className="absolute top-0 right-0 pt-10 -ml-16 w-48 z-50">
-                            <div className="w-full bg-base-800 border border-base-700 rounded-lg shadow-xl overflow-hidden text-base-200">
-                                <div className="px-4 py-3 border-b border-base-700 bg-base-900/50">
-                                    <p className="font-semibold truncate" title={displayName}>{displayName}</p>
-                                </div>
-                                <div className="py-1">
-                                    <button className="w-full text-left px-4 py-2 hover:bg-base-700 transition-colors text-sm">
-                                        Account info
-                                    </button>
-                                    <button className="w-full text-left px-4 py-2 hover:bg-base-700 transition-colors text-sm">
-                                        Settings
-                                    </button>
-                                    <div className="border-t border-base-700 my-1"></div>
-                                    <button
-                                        onClick={() => {
-                                            setDropdownOpen(false);
-                                            logout();
-                                        }}
-                                        className="w-full text-left px-4 py-2 hover:bg-base-700 text-base-500 font-medium transition-colors outline-none text-sm"
-                                    >
-                                        Logout
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
+                    <DropdownMenu aria-label="Profile Actions" variant="flat">
+                        <DropdownItem key="profile" className="h-14 gap-2 opacity-100 hover:bg-transparent cursor-default">
+                            <p className="font-semibold truncate text-base-50">{displayName}</p>
+                            <p className="text-xs text-base-400 truncate">{user?.email}</p>
+                        </DropdownItem>
+
+                        <DropdownItem key="account" className="hover:bg-base-700 hover:text-base-50 text-sm py-2">
+                            Account info
+                        </DropdownItem>
+
+                        <DropdownItem key="settings" className="hover:bg-base-700 hover:text-base-50 text-sm py-2">
+                            Settings
+                        </DropdownItem>
+
+                        <DropdownItem
+                            key="spotify"
+                            onPress={isSpotifyConnected ? disconnectSpotify : connectSpotify}
+                            className="hover:bg-base-700 hover:text-base-50 text-sm py-2"
+                        >
+                            {isSpotifyConnected ? 'Disconnect Spotify' : 'Connect Spotify'}
+                        </DropdownItem>
+
+                        <DropdownSection showDivider>
+                            <DropdownItem
+                                key="logout"
+                                className="text-base-400 hover:text-base-400 hover:bg-base-700 font-medium text-sm py-2"
+                                onPress={signOut}
+                            >
+                                Logout
+                            </DropdownItem>
+                        </DropdownSection>
+                    </DropdownMenu>
+                </Dropdown>
             </div>
         </header>
     );
