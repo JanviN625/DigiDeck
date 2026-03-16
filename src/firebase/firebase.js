@@ -60,16 +60,6 @@ const FirebaseService = {
     await deleteDoc(userRef(userId, 'tokens', 'spotify'));
   },
 
-  async saveUploadRecord(userId, uploadId, uploadData) {
-    await setDoc(userRef(userId, 'uploads', uploadId), {
-      ...uploadData,
-      uploadedAt: serverTimestamp(),
-    });
-  },
-
-  async deleteUploadRecord(userId, uploadId) {
-    await deleteDoc(userRef(userId, 'uploads', uploadId));
-  },
 };
 
 export default FirebaseService;
@@ -98,7 +88,10 @@ export const useFirebaseAuth = () => {
           });
         } else {
           // Update lastLoginAt on consecutive logins
-          await setDoc(ref, { lastLoginAt: serverTimestamp() }, { merge: true });
+          const dbUpdates = { lastLoginAt: serverTimestamp() };
+          // Ensure Google Auth photo priority is respected
+          if (currentUser.photoURL) dbUpdates.avatarUrl = currentUser.photoURL;
+          await setDoc(ref, dbUpdates, { merge: true });
         }
         setUser(currentUser);
       } else {

@@ -1,12 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { X, Music, Loader2, AlertCircle, Play } from 'lucide-react';
-import { Chip, Button } from '@heroui/react';
-import { useSpotify, useMix } from '../spotify/spotifyContext';
-import { resolveTrackData } from '../utils/helpers';
+import { X, Music, Loader2, AlertCircle } from 'lucide-react';
+import { useSpotify } from '../spotify/appContext';
 
 export default function PlaylistModal({ isOpen, onClose, playlist }) {
     const { getPlaylistTracks } = useSpotify();
-    const { handleAddTrack } = useMix();
 
     const [tracks, setTracks] = useState([]);
     const [loading, setLoading] = useState(false);
@@ -39,10 +36,6 @@ export default function PlaylistModal({ isOpen, onClose, playlist }) {
 
         fetchTracks();
     }, [isOpen, playlist, getPlaylistTracks]);
-
-    const onSelectTrack = (track) => {
-        handleAddTrack(resolveTrackData(track));
-    };
 
     if (!isOpen || !playlist) return null;
 
@@ -87,40 +80,21 @@ export default function PlaylistModal({ isOpen, onClose, playlist }) {
                             {tracks.map((track) => (
                                 <div
                                     key={track.id}
-                                    onClick={() => { if (track.preview_url) onSelectTrack(track); }}
-                                    className={`flex items-center gap-4 p-3 rounded-lg transition-colors group border border-transparent ${track.preview_url ? 'hover:bg-base-800 cursor-pointer hover:border-base-700' : 'opacity-50'}`}
+                                    className="flex items-center gap-4 p-3 rounded-lg border border-transparent"
                                 >
                                     {track.album?.images?.[0] ? (
-                                        <img src={track.album.images[0].url} alt={track.name} className="w-12 h-12 rounded object-cover shadow-sm group-hover:shadow border border-base-800 transition-all" />
+                                        <img src={track.album.images[0].url} alt={track.name} className="w-12 h-12 rounded object-cover shadow-sm border border-base-800 shrink-0" />
                                     ) : (
                                         <div className="w-12 h-12 rounded bg-base-800 flex items-center justify-center text-base-600 shrink-0">
                                             <Music size={20} />
                                         </div>
                                     )}
                                     <div className="flex flex-col flex-1 min-w-0 text-left">
-                                        <div className="flex items-center gap-2 mb-0.5">
-                                            <div className={`text-base-50 font-bold truncate ${track.preview_url ? 'group-hover:text-white transition-colors' : ''}`}>
-                                                {track.name}
-                                            </div>
-                                            {track.preview_url ? (
-                                                <Chip size="sm" variant="solid" classNames={{ base: 'bg-base-500', content: 'text-base-50 text-[10px]' }} startContent={<Play size={10} className="ml-1" />} />
-                                            ) : (
-                                                <Chip size="sm" variant="flat" classNames={{ base: 'bg-base-700', content: 'text-base-300 text-[10px]' }}>No preview</Chip>
-                                            )}
-                                        </div>
+                                        <div className="text-base-50 font-bold truncate mb-0.5">{track.name}</div>
                                         <div className="text-sm text-base-400 truncate">
                                             {track.artists?.map(a => a.name).join(', ')} • {track.album?.name}
                                         </div>
                                     </div>
-                                    <Button
-                                        isDisabled={!track.preview_url}
-                                        onPress={(e) => { e.stopPropagation(); onSelectTrack(track); }}
-                                        size="sm"
-                                        radius="full"
-                                        className={`px-4 font-bold transition-all shrink-0 shadow-sm ${track.preview_url ? 'bg-base-700 hover:bg-base-600 text-base-50 opacity-0 group-hover:opacity-100 transform translate-x-2 group-hover:translate-x-0' : 'bg-base-800 text-base-500'}`}
-                                    >
-                                        Add
-                                    </Button>
                                 </div>
                             ))}
                         </div>

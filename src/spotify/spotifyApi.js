@@ -8,7 +8,7 @@ import { updateProfile } from 'firebase/auth';
 const CLIENT_ID = process.env.REACT_APP_SPOTIFY_CLIENT_ID;
 const REDIRECT_URI = process.env.REACT_APP_SPOTIFY_REDIRECT_URI;
 
-const SCOPE = 'user-read-private user-read-email playlist-read-private playlist-read-collaborative user-library-read streaming user-modify-playback-state user-read-playback-state';
+const SCOPE = 'user-read-private user-read-email playlist-read-private playlist-read-collaborative user-library-read';
 
 const KEYS = {
   ACCESS_TOKEN: 'access_token',
@@ -157,9 +157,13 @@ export async function processCallbackCode(code) {
 
     // Save minimal connection state to DB
     // Doing this AFTER token set so the UI trigger completes successfully
-    await setDoc(userRef, {
+    const dbUpdates = {
       spotify: { spotifyUserId: profileData.id, connectedAt: serverTimestamp() }
-    }, { merge: true });
+    };
+    if (updates.photoURL) dbUpdates.avatarUrl = updates.photoURL;
+    if (updates.displayName) dbUpdates.displayName = updates.displayName;
+
+    await setDoc(userRef, dbUpdates, { merge: true });
   }
 
   await FirebaseService.saveSpotifyToken(userId, { access_token, refresh_token, expires_at });

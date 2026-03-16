@@ -4,7 +4,7 @@ import { HeroUIProvider } from "@heroui/react";
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
-import { AppProviders } from './spotify/spotifyContext';
+import { AppProviders } from './spotify/appContext';
 
 const urlParams = new URLSearchParams(window.location.search);
 

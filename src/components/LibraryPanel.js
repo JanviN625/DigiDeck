@@ -1,14 +1,24 @@
-import React, { useState, useEffect } from 'react';
-import { ChevronLeft, Library, AlertCircle, ChevronRight, Upload, Play, Search, Loader2, Music, X } from 'lucide-react';
-import { Button, Card } from '@heroui/react';
-import { useSpotify, useMix, useSpotifyConnect } from '../spotify/spotifyContext';
-import { resolveTrackData } from '../utils/helpers';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { ChevronLeft, Library, AlertCircle, ChevronRight, Upload, Search, Loader2, Music, X, Trash2 } from 'lucide-react';
+import { Button } from '@heroui/react';
+import { useSpotify, useMix, useSpotifyConnect } from '../spotify/appContext';
+import { readId3Tags, spotifyConfirmMatch } from '../utils/helpers';
 import PlaylistModal from './PlaylistModal';
+import { auth, db, storage } from '../firebase/firebaseConfig';
+import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { onAuthStateChanged } from 'firebase/auth';
+
+const SpotifyIcon = () => (
+    <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.48.659.24 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.84.24 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.6.18-1.2.72-1.38 4.26-1.26 11.28-1.02 15.72 1.621.539.3.719 1.02.419 1.56-.239.54-.959.72-1.559.3z" />
+    </svg>
+);
 
 export default function LibraryPanel() {
     const [isCollapsed, setIsCollapsed] = useState(false);
     const { getUserPlaylists, searchSpotify } = useSpotify();
-    const { handleAddTrack } = useMix();
+    const { handleAddTrack, tracks, handleUpdateTrack } = useMix();
     const { isSpotifyConnected, connectSpotify, disconnectSpotify, isConnecting } = useSpotifyConnect();
 
     const [playlists, setPlaylists] = useState([]);
@@ -22,6 +32,174 @@ export default function LibraryPanel() {
     const [searchResults, setSearchResults] = useState([]);
     const [searchLoading, setSearchLoading] = useState(false);
     const [searchError, setSearchError] = useState(null);
+
+    const fileInputRef = useRef(null);
+    const [uploadingFiles, setUploadingFiles] = useState(false);
+    const [userUploads, setUserUploads] = useState([]);
+    const [currentUser, setCurrentUser] = useState(null);
+
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, (user) => {
+            setCurrentUser(user);
+        });
+        return () => unsubscribe();
+    }, []);
+
+    // Keep a live ref of tracks so the Spotify enrichment effect can read the
+    // current workspace without declaring tracks as a dependency (which would
+    // cause it to re-run after every update it triggers, creating a loop).
+    const tracksRef = useRef(tracks);
+    useEffect(() => { tracksRef.current = tracks; }, [tracks]);
+
+    // When Spotify connects (including mid-session), re-enrich every local track
+    // that is missing artist or artwork — no need to remove and re-add tracks.
+    const enrichLocalTracks = useCallback(async () => {
+        const localTracks = tracksRef.current.filter(
+            t => t.isLocal && t.title && (!t.albumArt || !t.artistName || t.artistName === 'Local File')
+        );
+        if (!localTracks.length) return;
+
+        for (const track of localTracks) {
+            try {
+                const query = track.artistName && track.artistName !== 'Local File'
+                    ? `${track.title} ${track.artistName}`
+                    : track.title;
+                const results = await searchSpotify(query, ['track'], 5);
+                const match = spotifyConfirmMatch(track.title, results?.tracks?.items);
+                if (match) {
+                    const updates = {};
+                    const spotifyArtist = match.artists?.map(a => a.name).join(', ');
+                    const spotifyArt = match.album?.images?.[0]?.url;
+                    if (spotifyArtist) updates.artistName = spotifyArtist;
+                    if (spotifyArt) updates.albumArt = spotifyArt;
+                    if (Object.keys(updates).length) handleUpdateTrack(track.id, updates);
+                }
+            } catch {
+                // best-effort; a failed search for one track should not block others
+            }
+        }
+    }, [searchSpotify, handleUpdateTrack]);
+
+    useEffect(() => {
+        if (isSpotifyConnected) enrichLocalTracks();
+    }, [isSpotifyConnected, enrichLocalTracks]);
+
+    useEffect(() => {
+        if (!currentUser) {
+            setUserUploads([]);
+            return;
+        }
+
+        const q = query(
+            collection(db, `users/${currentUser.uid}/uploads`),
+            orderBy('createdAt', 'desc')
+        );
+
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const tracks = [];
+            snapshot.forEach((doc) => {
+                tracks.push({ id: doc.id, ...doc.data() });
+            });
+            setUserUploads(tracks);
+        }, (error) => {
+            // Expected on logout
+        });
+
+        return () => unsubscribe();
+    }, [currentUser]);
+
+    const handleFileUpload = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file || !currentUser) return;
+
+        setUploadingFiles(true);
+        try {
+            const timestamp = Date.now();
+
+            // 1. Read ID3 tags before uploading — best-effort, never blocks the upload
+            const { title: id3Title, artist: id3Artist, albumArtBlob } = await readId3Tags(file);
+
+            // 2. Upload audio
+            const storagePath = `uploads/${currentUser.uid}/${timestamp}_${file.name}`;
+            const storageRef = ref(storage, storagePath);
+            await uploadBytes(storageRef, file);
+            const downloadUrl = await getDownloadURL(storageRef);
+
+            // 3. Upload embedded cover art if present
+            let albumArt = null;
+            if (albumArtBlob) {
+                const coverRef = ref(storage, `uploads/${currentUser.uid}/${timestamp}_cover`);
+                await uploadBytes(coverRef, albumArtBlob, { contentType: albumArtBlob.type });
+                albumArt = await getDownloadURL(coverRef);
+            }
+
+            // 4. Save enriched metadata to Firestore
+            await addDoc(collection(db, `users/${currentUser.uid}/uploads`), {
+                title: id3Title || file.name.replace(/\.[^/.]+$/, ""),
+                artistName: id3Artist || null,
+                albumArt: albumArt,
+                fileName: file.name,
+                storagePath,
+                downloadUrl,
+                createdAt: timestamp
+            });
+
+        } catch (err) {
+            console.error("Upload failed", err);
+        } finally {
+            setUploadingFiles(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+    };
+
+    const handleDeleteUpload = async (e, upload) => {
+        e.stopPropagation();
+        if (!currentUser) return;
+        
+        try {
+            // Delete from storage
+            const storageRef = ref(storage, upload.storagePath);
+            await deleteObject(storageRef);
+            // Delete from firestore
+            await deleteDoc(doc(db, `users/${currentUser.uid}/uploads`, upload.id));
+        } catch (err) {
+            console.error("Failed to delete track", err);
+        }
+    };
+
+    const handleInsertUpload = async (upload) => {
+        let artistName = upload.artistName || 'Local File';
+        let albumArt = upload.albumArt || null;
+
+        // Spotify enrichment — if connected, search for a matching track to get
+        // higher-quality artist name and album art. Falls through silently on failure.
+        if (isSpotifyConnected && upload.title) {
+            try {
+                const query = artistName !== 'Local File'
+                    ? `${upload.title} ${artistName}`
+                    : upload.title;
+                const results = await searchSpotify(query, ['track'], 5);
+                const match = spotifyConfirmMatch(upload.title, results?.tracks?.items);
+                if (match) {
+                    artistName = match.artists?.map(a => a.name).join(', ') || artistName;
+                    albumArt = match.album?.images?.[0]?.url || albumArt;
+                }
+            } catch {
+                // best-effort; ID3 data is the fallback
+            }
+        }
+
+        handleAddTrack({
+            title: upload.title,
+            artistName,
+            albumArt,
+            spotifyId: 'local-' + upload.id,
+            audioUrl: upload.downloadUrl,
+            isLocal: true,
+            bpm: '[BPM]',
+            trackKey: '[key]'
+        });
+    };
 
     useEffect(() => {
         let mounted = true;
@@ -41,12 +219,6 @@ export default function LibraryPanel() {
 
         return () => { mounted = false; clearTimeout(debounce); };
     }, [searchQuery, searchSpotify]);
-
-    const handleSelectTrack = (track) => {
-        handleAddTrack(resolveTrackData(track));
-        setSearchQuery('');
-        setSearchResults([]);
-    };
 
     useEffect(() => {
         let mounted = true;
@@ -101,13 +273,60 @@ export default function LibraryPanel() {
                                 <span className="text-[10px] uppercase tracking-widest text-base-450 font-bold text-center whitespace-nowrap">YOUR FILES</span>
                                 <div className="flex-1 h-px bg-white/40" />
                             </div>
-                            <Button radius="full" fullWidth variant="solid" className="mb-2 p-0 h-10 font-bold text-white bg-base-450 hover:bg-base-450/80">
-                                <div className="flex flex-row items-center justify-center gap-2 w-full h-full">
-                                    <Upload size={16} className="text-white shrink-0" />
-                                    <span>Upload MP3</span>
-                                </div>
+                            <input 
+                                type="file" 
+                                accept="audio/*" 
+                                ref={fileInputRef} 
+                                style={{ display: 'none' }} 
+                                onChange={handleFileUpload} 
+                            />
+                            <Button onPress={() => !uploadingFiles && fileInputRef.current?.click()} disabled={!currentUser} radius="full" fullWidth variant="solid" className="mb-2 p-0 h-10 font-bold text-white bg-base-450 hover:bg-base-450/80">
+                                {uploadingFiles ? (
+                                    <div className="flex flex-row items-center justify-center gap-2 w-full h-full">
+                                        <Loader2 size={16} className="text-white shrink-0 animate-spin" />
+                                        <span>Uploading...</span>
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-row items-center justify-center gap-2 w-full h-full">
+                                        <Upload size={16} className="text-white shrink-0" />
+                                        <span>Upload MP3</span>
+                                    </div>
+                                )}
                             </Button>
-                            <div className="text-[11px] text-base-300 leading-snug text-center mt-2 px-2">No files yet. Upload an MP3 to get started.</div>
+                            
+                            {!currentUser ? (
+                                <div className="text-[11px] text-base-300 leading-snug text-center mt-2 px-2">Sign in to upload custom tracks.</div>
+                            ) : userUploads.length === 0 ? (
+                                <div className="text-[11px] text-base-300 leading-snug text-center mt-2 px-2">No files yet. Upload an MP3 to get started.</div>
+                            ) : (
+                                <div className="flex flex-col gap-1 mt-2">
+                                    {userUploads.map((upload) => (
+                                        <div
+                                            key={upload.id}
+                                            onClick={() => handleInsertUpload(upload)}
+                                            className="flex items-center justify-between gap-2 p-1.5 rounded hover:bg-base-800 cursor-pointer transition-colors group border border-transparent hover:border-base-700"
+                                            title="Add to Workspace"
+                                        >
+                                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                <div className="w-8 h-8 rounded bg-base-800 flex items-center justify-center text-base-600 shrink-0">
+                                                    <Music size={12} />
+                                                </div>
+                                                <div className="flex flex-col flex-1 min-w-0 text-left overflow-hidden">
+                                                    <div className="text-[13px] font-medium text-base-200 group-hover:text-base-50 truncate transition-colors">{upload.title}</div>
+                                                    <div className="text-[10px] text-base-400 truncate">{upload.artistName || 'Local File'}</div>
+                                                </div>
+                                            </div>
+                                            <button 
+                                                onClick={(e) => handleDeleteUpload(e, upload)}
+                                                className="p-1.5 text-base-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all rounded hover:bg-base-700"
+                                                title="Delete file"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
                         <div className="flex items-center justify-center gap-2 my-2 mt-1 mb-5 px-1">
@@ -126,28 +345,17 @@ export default function LibraryPanel() {
                                     ) : (
                                         <Button onPress={connectSpotify} radius="full" fullWidth variant="solid" className="mb-2 p-0 h-10 font-bold text-white bg-base-450 hover:bg-base-450/80">
                                             <div className="flex flex-row items-center justify-center gap-2 w-full h-full">
-                                                <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor">
-                                                    <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.48.659.24 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.84.24 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.6.18-1.2.72-1.38 4.26-1.26 11.28-1.02 15.72 1.621.539.3.719 1.02.419 1.56-.239.54-.959.72-1.559.3z" />
-                                                </svg>
+                                                <SpotifyIcon />
                                                 <span>Connect Spotify</span>
                                             </div>
                                         </Button>
                                     )}
                                     <p className="text-[11px] text-base-300 text-center px-1 leading-relaxed">
-                                        Browse your Spotify playlists for inspiration. Tracks with a preview available (30s max) can be added directly to your mix!
+                                        Browse your Spotify playlists and catalog for inspiration. Upload tracks as MP3s to add them to your mix.
                                     </p>
                                 </div>
                             ) : (
                                 <div className="flex flex-col">
-                                    <Card className="bg-base-900/50 border border-base-400 p-2 mb-3 shadow-none text-left rounded-md">
-                                        <div className="flex items-start gap-2">
-                                            <AlertCircle size={14} className="text-base-400 shrink-0 mt-0.5" />
-                                            <p className="text-[11px] text-base-300 leading-snug">
-                                                Spotify Premium required for in-app playback. Tracks marked <Play size={10} className="inline text-base-450 fill-current mx-0.5" /> have a 30s preview available.
-                                            </p>
-                                        </div>
-                                    </Card>
-
                                     <div className="mb-3 flex items-center bg-base-900 rounded border border-base-450 text-base-450 overflow-hidden relative">
                                         <div className="pl-3"><Search size={14} className="shrink-0" /></div>
                                         <input
@@ -181,18 +389,17 @@ export default function LibraryPanel() {
                                                     {searchResults.map((track) => (
                                                         <div
                                                             key={track.id}
-                                                            onClick={() => handleSelectTrack(track)}
-                                                            className="flex items-center gap-2 p-1.5 rounded hover:bg-base-800 cursor-pointer transition-colors group border border-transparent hover:border-base-700"
+                                                            className="flex items-center gap-2 p-1.5 rounded border border-transparent"
                                                         >
                                                             {track.album?.images?.[0] ? (
-                                                                <img src={track.album.images[0].url} alt={track.name} className="w-8 h-8 rounded object-cover border border-base-800 group-hover:border-base-600 shrink-0" />
+                                                                <img src={track.album.images[0].url} alt={track.name} className="w-8 h-8 rounded object-cover border border-base-800 shrink-0" />
                                                             ) : (
                                                                 <div className="w-8 h-8 rounded bg-base-800 flex items-center justify-center text-base-600 shrink-0">
                                                                     <Music size={12} />
                                                                 </div>
                                                             )}
                                                             <div className="flex flex-col flex-1 min-w-0 text-left overflow-hidden">
-                                                                <div className="text-[13px] font-medium text-base-200 group-hover:text-base-50 truncate transition-colors">{track.name}</div>
+                                                                <div className="text-[13px] font-medium text-base-200 truncate">{track.name}</div>
                                                                 <div className="text-[10px] text-base-400 truncate">{track.artists?.map(a => a.name).join(', ')}</div>
                                                             </div>
                                                         </div>
@@ -243,9 +450,7 @@ export default function LibraryPanel() {
 
                                     <Button onPress={disconnectSpotify} radius="full" fullWidth variant="solid" className="mt-4 mb-2 p-0 h-10 font-bold text-white bg-base-450 hover:bg-base-450/80">
                                         <div className="flex flex-row items-center justify-center gap-2 w-full h-full">
-                                            <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" fill="currentColor">
-                                                <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.48.659.24 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.84.24 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.6.18-1.2.72-1.38 4.26-1.26 11.28-1.02 15.72 1.621.539.3.719 1.02.419 1.56-.239.54-.959.72-1.559.3z" />
-                                            </svg>
+                                            <SpotifyIcon />
                                             <span>Disconnect Spotify</span>
                                         </div>
                                     </Button>

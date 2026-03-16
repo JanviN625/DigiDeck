@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Button, Divider } from '@heroui/react';
-import { Mail, Lock, User } from 'lucide-react';
 import { useFirebaseAuth } from '../firebase/firebase';
 
 export default function AuthScreen() {
@@ -13,9 +12,7 @@ export default function AuthScreen() {
     const [isLoading, setIsLoading] = useState(false);
 
     const handleSubmit = async (e) => {
-        if (e && typeof e.preventDefault === 'function') {
-            e.preventDefault();
-        }
+        e?.preventDefault?.();
 
         if (!email || !password || (isSignUp && !displayName)) {
             setError('Please fill out all fields.');

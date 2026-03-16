@@ -1,39 +1,71 @@
-import { doc, setDoc, getDoc, getDocs, collection, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import FirebaseService from '../firebase/firebase';
+import FirebaseService, { useFirebaseAuth } from '../firebase/firebase';
+import {
+    onAuthStateChanged,
+    signInWithPopup,
+    signInWithEmailAndPassword,
+    createUserWithEmailAndPassword,
+    signOut,
+    updateProfile,
+} from 'firebase/auth';
+import { doc, getDoc, setDoc, getDocs, collection, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase/firebaseConfig';
+import { renderHook, act } from '@testing-library/react';
 
-jest.mock('../firebase/firebaseConfig', () => ({ db: {}, auth: {} }));
+// ─── Mocks ────────────────────────────────────────────────────────────────────
+
+jest.mock('../firebase/firebaseConfig', () => ({ auth: {}, db: {} }));
 
 jest.mock('firebase/firestore', () => ({
     doc: jest.fn((_db, ...path) => path.join('/')),
-    setDoc: jest.fn(),
     getDoc: jest.fn(),
-    collection: jest.fn((_db, ...path) => path.join('/')),
+    setDoc: jest.fn(),
     getDocs: jest.fn(),
+    collection: jest.fn((_db, ...path) => path.join('/')),
     deleteDoc: jest.fn(),
     serverTimestamp: jest.fn(() => 'mock_timestamp'),
 }));
 
 jest.mock('firebase/auth', () => ({
-    onAuthStateChanged: jest.fn(() => jest.fn()),
+    onAuthStateChanged: jest.fn(),
     signInWithPopup: jest.fn(),
-    GoogleAuthProvider: jest.fn(),
+    GoogleAuthProvider: jest.fn().mockImplementation(() => ({})),
     createUserWithEmailAndPassword: jest.fn(),
     signInWithEmailAndPassword: jest.fn(),
     signOut: jest.fn(),
     updateProfile: jest.fn(),
 }));
 
+// ─── Shared fixtures ──────────────────────────────────────────────────────────
+
 const USER = 'user_123';
+
+const mockUser = {
+    uid: 'uid_123',
+    email: 'test@test.com',
+    displayName: 'Test User',
+    photoURL: null,
+};
+
+let capturedAuthCallback;
+
+// ─── Per-test setup ───────────────────────────────────────────────────────────
 
 beforeEach(() => {
     jest.clearAllMocks();
+    capturedAuthCallback = null;
+    // resetMocks:true (react-scripts) clears inline jest.fn() implementations — restore here.
+    const { doc, serverTimestamp, collection } = require('firebase/firestore');
     doc.mockImplementation((_db, ...path) => path.join('/'));
     collection.mockImplementation((_db, ...path) => path.join('/'));
     serverTimestamp.mockReturnValue('mock_timestamp');
+    const { onAuthStateChanged } = require('firebase/auth');
+    onAuthStateChanged.mockImplementation((auth, cb) => {
+        capturedAuthCallback = cb;
+        return jest.fn();
+    });
 });
 
-// ─── Spotify Token Management ─────────────────────────────────────────────────
+// ─── FirebaseService — Spotify Token Management ───────────────────────────────
 
 describe('saveSpotifyToken', () => {
     it('writes token data to the correct Firestore path', async () => {
@@ -78,7 +110,7 @@ describe('deleteSpotifyToken', () => {
     });
 });
 
-// ─── Playlist Management ──────────────────────────────────────────────────────
+// ─── FirebaseService — Playlist Management ────────────────────────────────────
 
 describe('savePlaylist', () => {
     it('writes playlist data with an updatedAt timestamp', async () => {
@@ -151,30 +183,213 @@ describe('deletePlaylist', () => {
     });
 });
 
-// ─── Upload Record Management ─────────────────────────────────────────────────
+// ─── useFirebaseAuth — Initial State ─────────────────────────────────────────
 
-describe('saveUploadRecord', () => {
-    it('writes upload data with an uploadedAt timestamp', async () => {
+describe('useFirebaseAuth — initial state', () => {
+    it('starts with user null and loading true', () => {
+        const { result } = renderHook(() => useFirebaseAuth());
+
+        expect(result.current.user).toBeNull();
+        expect(result.current.loading).toBe(true);
+    });
+});
+
+// ─── useFirebaseAuth — Auth State Changes ────────────────────────────────────
+
+describe('useFirebaseAuth — new user', () => {
+    it('creates a full user document in Firestore on first login', async () => {
+        getDoc.mockResolvedValueOnce({ exists: () => false });
         setDoc.mockResolvedValueOnce();
-        const data = { fileName: 'track.mp3' };
 
-        await FirebaseService.saveUploadRecord(USER, 'upload_1', data);
+        renderHook(() => useFirebaseAuth());
 
-        expect(doc).toHaveBeenCalledWith(db, 'users', USER, 'uploads', 'upload_1');
+        await act(async () => { await capturedAuthCallback(mockUser); });
+
         expect(setDoc).toHaveBeenCalledWith(
-            `users/${USER}/uploads/upload_1`,
-            { ...data, uploadedAt: 'mock_timestamp' }
+            `users/${mockUser.uid}`,
+            expect.objectContaining({
+                uid: mockUser.uid,
+                email: mockUser.email,
+                displayName: mockUser.displayName,
+                spotify: null,
+                createdAt: 'mock_timestamp',
+                lastLoginAt: 'mock_timestamp',
+            })
+        );
+    });
+
+    it('sets loading to false and user after the document is created', async () => {
+        getDoc.mockResolvedValueOnce({ exists: () => false });
+        setDoc.mockResolvedValueOnce();
+
+        const { result } = renderHook(() => useFirebaseAuth());
+
+        await act(async () => { await capturedAuthCallback(mockUser); });
+
+        expect(result.current.user).toEqual(mockUser);
+        expect(result.current.loading).toBe(false);
+    });
+});
+
+describe('useFirebaseAuth — returning user', () => {
+    it('only updates lastLoginAt on subsequent logins', async () => {
+        getDoc.mockResolvedValueOnce({ exists: () => true });
+        setDoc.mockResolvedValueOnce();
+
+        renderHook(() => useFirebaseAuth());
+
+        await act(async () => { await capturedAuthCallback(mockUser); });
+
+        expect(setDoc).toHaveBeenCalledWith(
+            `users/${mockUser.uid}`,
+            { lastLoginAt: 'mock_timestamp' },
+            { merge: true }
+        );
+        expect(setDoc).toHaveBeenCalledTimes(1);
+    });
+
+    it('also writes avatarUrl to Firestore when the returning user has a photoURL', async () => {
+        const userWithPhoto = { ...mockUser, photoURL: 'https://photo.example' };
+        getDoc.mockResolvedValueOnce({ exists: () => true });
+        setDoc.mockResolvedValueOnce();
+
+        renderHook(() => useFirebaseAuth());
+
+        await act(async () => { await capturedAuthCallback(userWithPhoto); });
+
+        expect(setDoc).toHaveBeenCalledWith(
+            `users/${mockUser.uid}`,
+            expect.objectContaining({ lastLoginAt: 'mock_timestamp', avatarUrl: 'https://photo.example' }),
+            { merge: true }
         );
     });
 });
 
-describe('deleteUploadRecord', () => {
-    it('deletes the upload document from the correct path', async () => {
-        deleteDoc.mockResolvedValueOnce();
+describe('useFirebaseAuth — signed out', () => {
+    it('sets user to null and loading to false when no user', async () => {
+        const { result } = renderHook(() => useFirebaseAuth());
 
-        await FirebaseService.deleteUploadRecord(USER, 'upload_1');
+        await act(async () => { await capturedAuthCallback(null); });
 
-        expect(doc).toHaveBeenCalledWith(db, 'users', USER, 'uploads', 'upload_1');
-        expect(deleteDoc).toHaveBeenCalledWith(`users/${USER}/uploads/upload_1`);
+        expect(result.current.user).toBeNull();
+        expect(result.current.loading).toBe(false);
+    });
+});
+
+// ─── useFirebaseAuth — Login Methods ─────────────────────────────────────────
+
+describe('useFirebaseAuth — loginWithGoogle', () => {
+    it('calls signInWithPopup with a GoogleAuthProvider instance', async () => {
+        const { result } = renderHook(() => useFirebaseAuth());
+
+        await act(async () => { await result.current.loginWithGoogle(); });
+
+        expect(signInWithPopup).toHaveBeenCalledTimes(1);
+    });
+
+    it('propagates errors thrown by signInWithPopup', async () => {
+        signInWithPopup.mockRejectedValueOnce(new Error('popup_closed'));
+        const { result } = renderHook(() => useFirebaseAuth());
+
+        await expect(act(async () => {
+            await result.current.loginWithGoogle();
+        })).rejects.toThrow('popup_closed');
+    });
+});
+
+describe('useFirebaseAuth — loginWithEmail', () => {
+    it('calls signInWithEmailAndPassword with the provided credentials', async () => {
+        signInWithEmailAndPassword.mockResolvedValueOnce({ user: mockUser });
+        const { result } = renderHook(() => useFirebaseAuth());
+
+        await act(async () => { await result.current.loginWithEmail('test@test.com', 'password'); });
+
+        expect(signInWithEmailAndPassword).toHaveBeenCalledWith({}, 'test@test.com', 'password');
+    });
+
+    it('propagates auth errors (e.g. wrong password)', async () => {
+        signInWithEmailAndPassword.mockRejectedValueOnce(new Error('auth/wrong-password'));
+        const { result } = renderHook(() => useFirebaseAuth());
+
+        await expect(act(async () => {
+            await result.current.loginWithEmail('test@test.com', 'wrong');
+        })).rejects.toThrow('auth/wrong-password');
+    });
+});
+
+describe('useFirebaseAuth — signUpWithEmail', () => {
+    it('creates a user and updates profile when displayName is provided', async () => {
+        createUserWithEmailAndPassword.mockResolvedValueOnce({ user: mockUser });
+        updateProfile.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+
+        const { result } = renderHook(() => useFirebaseAuth());
+
+        await act(async () => {
+            await result.current.signUpWithEmail('test@test.com', 'password', 'Test User');
+        });
+
+        expect(createUserWithEmailAndPassword).toHaveBeenCalledWith({}, 'test@test.com', 'password');
+        expect(updateProfile).toHaveBeenCalledWith(mockUser, { displayName: 'Test User' });
+        expect(setDoc).toHaveBeenCalledWith(
+            `users/${mockUser.uid}`,
+            { displayName: 'Test User' },
+            { merge: true }
+        );
+    });
+
+    it('skips profile update when no displayName is provided', async () => {
+        createUserWithEmailAndPassword.mockResolvedValueOnce({ user: mockUser });
+        const { result } = renderHook(() => useFirebaseAuth());
+
+        await act(async () => {
+            await result.current.signUpWithEmail('test@test.com', 'password');
+        });
+
+        expect(updateProfile).not.toHaveBeenCalled();
+        expect(setDoc).not.toHaveBeenCalled();
+    });
+});
+
+describe('useFirebaseAuth — signOut', () => {
+    it('calls firebaseSignOut', async () => {
+        signOut.mockResolvedValueOnce();
+        const { result } = renderHook(() => useFirebaseAuth());
+
+        await act(async () => { await result.current.signOut(); });
+
+        expect(signOut).toHaveBeenCalledTimes(1);
+    });
+});
+
+// ─── useFirebaseAuth — Profile Update Event ──────────────────────────────────
+
+describe('useFirebaseAuth — firebase-profile-updated event', () => {
+    it('calls reload() and refreshes user state when the event fires', async () => {
+        const { auth } = require('../firebase/firebaseConfig');
+        const reloadMock = jest.fn().mockResolvedValue(undefined);
+        auth.currentUser = { ...mockUser, displayName: 'Updated Name', reload: reloadMock };
+
+        const { result } = renderHook(() => useFirebaseAuth());
+
+        await act(async () => {
+            window.dispatchEvent(new Event('firebase-profile-updated'));
+        });
+
+        expect(reloadMock).toHaveBeenCalledTimes(1);
+        expect(result.current.user.displayName).toBe('Updated Name');
+    });
+
+    it('does nothing when auth.currentUser is null when the event fires', async () => {
+        const { auth } = require('../firebase/firebaseConfig');
+        auth.currentUser = null;
+
+        const { result } = renderHook(() => useFirebaseAuth());
+
+        await act(async () => {
+            window.dispatchEvent(new Event('firebase-profile-updated'));
+        });
+
+        expect(result.current.user).toBeNull();
     });
 });
