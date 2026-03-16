@@ -184,7 +184,7 @@ export default function Header() {
                 >
                     <DropdownTrigger>
                         {avatarSrc ? (
-                            <button className="bg-base-700 border-2 border-transparent hover:border-base-500 transition-colors cursor-pointer rounded-full overflow-hidden w-10 h-10 flex items-center justify-center shrink-0">
+                            <button className="bg-base-700 border-2 border-base-500 cursor-pointer rounded-full overflow-hidden w-10 h-10 flex items-center justify-center shrink-0">
                                 <img src={avatarSrc} alt={displayName} className="w-full h-full object-cover" />
                             </button>
                         ) : (
@@ -194,7 +194,7 @@ export default function Header() {
                                 getInitials={CustomInitials}
                                 showFallback
                                 classNames={{
-                                    base: "bg-base-700 border-2 border-transparent hover:border-base-500 transition-colors cursor-pointer",
+                                    base: "bg-base-700 border-2 border-base-500 cursor-pointer",
                                     name: "text-base-50 font-bold"
                                 }}
                             />

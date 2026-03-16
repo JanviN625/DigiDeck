@@ -257,6 +257,7 @@ export default function LibraryPanel() {
             ) : (
                 <div className="p-4 flex flex-col h-full w-64 shrink-0 transition-opacity duration-300 text-left">
                     <div className="flex justify-between items-center mb-4">
+                        <div className="w-7 shrink-0" />
                         <h2 className="text-sm font-bold text-base-50 px-1 flex items-center gap-2">
                             <Library size={16} className="text-base-450" />
                             Library
