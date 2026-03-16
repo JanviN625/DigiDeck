@@ -8,7 +8,8 @@ import WaveSurfer from 'wavesurfer.js';
 import { analyzeAudioBuffer } from '../audio/essentiaAnalyzer';
 import { useMix } from '../spotify/appContext';
 
-const SPEED_PRESETS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+const SPEED_MIN = 0.25;
+const SPEED_MAX = 2.0;
 
 const parseFade = (v) => { const n = parseFloat(String(v)); return isNaN(n) || n < 0 ? 0 : n; };
 
@@ -51,12 +52,6 @@ function FadeField({ label, value, onChange, onReset }) {
     );
 }
 
-// Find the closest preset index for a given speed value
-function speedToIndex(val) {
-    const v = parseFloat(val);
-    return SPEED_PRESETS.reduce((best, s, i) =>
-        Math.abs(s - v) < Math.abs(SPEED_PRESETS[best] - v) ? i : best, 3);
-}
 
 const EFFECT_CONFIGS = {
     volume: {
@@ -156,6 +151,7 @@ export default function TrackCard({
     const [volume, setVolume] = useState(initialVolume);
     const [pitch, setPitch] = useState(initialPitch);
     const [speed, setSpeed] = useState(initialSpeed);
+    const [speedInputVal, setSpeedInputVal] = useState(null); // null = display mode, string = editing
     const [fadeIn, setFadeIn] = useState(() => parseFade(initialFadeIn));
     const [fadeOut, setFadeOut] = useState(() => parseFade(initialFadeOut));
     const [audioDuration, setAudioDuration] = useState(0);
@@ -554,8 +550,8 @@ export default function TrackCard({
             const seg = prev[idx];
             const next = [...prev];
             next.splice(idx, 1,
-                makeDefaultSegment(seg.id, seg.startPct, pct),
-                makeDefaultSegment(Date.now(), pct, seg.endPct)
+                { ...seg, startPct: seg.startPct, endPct: pct },
+                { ...seg, id: Date.now(), startPct: pct, endPct: seg.endPct }
             );
             return next;
         });
@@ -580,12 +576,21 @@ export default function TrackCard({
         if (!audioUrl) return;
         if (isPlaying && isVisible) {
             play();
-            if (fadeIn > 0) applyFadeIn(fadeIn);
+            // Find which segment the playhead is currently in and apply its fadeIn.
+            // Pre-set playingSegmentIdRef so the rAF loop doesn't double-apply on the first frame.
+            const dur = durationRef.current;
+            const segs = segmentsRef.current;
+            if (dur > 0 && segs?.length > 0 && wavesurferRef.current) {
+                const pct = wavesurferRef.current.getCurrentTime() / dur;
+                const startSeg = segs.find(s => pct >= s.startPct && pct < s.endPct) ?? segs[0];
+                playingSegmentIdRef.current = startSeg?.id ?? null;
+                if (startSeg?.fadeIn > 0) applyFadeIn(startSeg.fadeIn);
+            }
             fadeOutTriggeredRef.current = false;
         } else {
             pause();
         }
-    }, [isPlaying, isVisible, play, pause, applyFadeIn, fadeIn, audioUrl]);
+    }, [isPlaying, isVisible, play, pause, applyFadeIn, audioUrl]);
 
     // Sync per-track settings back to MixContext so they are captured by localStorage persistence.
     // hasMounted guard skips the initial render to avoid overwriting hydrated values with prop defaults.
@@ -645,39 +650,57 @@ export default function TrackCard({
                 currentTimePctRef.current = displayProportion;
                 wavesurferRef.current.seekTo(displayProportion);
 
-                // Trigger fade-out when within fadeOut seconds of the end
-                if (!fadeOutTriggeredRef.current && fadeOut > 0) {
-                    const remaining = track.audioBuffer.duration - audioPosSec;
-                    if (remaining <= fadeOut && remaining > 0) {
-                        fadeOutTriggeredRef.current = true;
-                        applyFadeOut(remaining);
+                // Determine which segment is currently playing — used for both
+                // boundary detection and per-segment fade logic below.
+                const segs = segmentsRef.current;
+                let playingSeg = null;
+                if (segs && segs.length > 0 && durationRef.current > 0) {
+                    const pct = audioPosSec / durationRef.current;
+                    playingSeg = segs.find(s => pct >= s.startPct && pct < s.endPct) ?? segs[segs.length - 1];
+                }
+
+                // Segment boundary detection — fires when the playhead enters a new segment.
+                // Applies pitch/speed/EQ and fadeIn for the new segment; resets the fadeOut
+                // trigger so each segment's fade-out can fire independently.
+                // Effects chain is NOT reconciled here to avoid audio glitches during playback.
+                if (playingSeg && playingSeg.id !== playingSegmentIdRef.current) {
+                    playingSegmentIdRef.current = playingSeg.id;
+                    fadeOutTriggeredRef.current = false;
+                    AudioEngineService.setPitch(trackId, playingSeg.pitch);
+                    AudioEngineService.setSpeed(trackId, playingSeg.speed);
+                    AudioEngineService.setEQ(trackId, { low: playingSeg.eqLow, mid: playingSeg.eqMid, high: playingSeg.eqHigh });
+                    if (playingSeg.fadeIn > 0) {
+                        applyFadeIn(playingSeg.fadeIn);
+                    } else {
+                        // Restore gain in case the previous segment faded out
+                        const t = AudioEngineService.tracks.get(trackId);
+                        if (t) {
+                            t.gain.gain.cancelScheduledValues(AudioEngineService.ctx.currentTime);
+                            t.gain.gain.setValueAtTime(t.targetVolume, AudioEngineService.ctx.currentTime);
+                        }
+                    }
+                    // Sync UI to reflect the playing segment (effects not reconciled here)
+                    if (playingSeg.id !== activeSegmentIdRef.current) {
+                        activeSegmentIdRef.current = playingSeg.id;
+                        setActiveSegmentId(playingSeg.id);
+                        setPitch(playingSeg.pitch);
+                        setSpeed(playingSeg.speed);
+                        setFadeIn(playingSeg.fadeIn);
+                        setFadeOut(playingSeg.fadeOut);
+                        setEqLow(playingSeg.eqLow);
+                        setEqMid(playingSeg.eqMid);
+                        setEqHigh(playingSeg.eqHigh);
                     }
                 }
 
-                // Segment boundary detection — apply new segment's audio settings as playhead
-                // crosses a cut point. Only pitch/speed/EQ are applied here (no effects
-                // reconciliation) to avoid audio glitches during live playback.
-                const segs = segmentsRef.current;
-                if (segs && segs.length > 1 && durationRef.current > 0) {
-                    const pct = audioPosSec / durationRef.current;
-                    const playingSeg = segs.find(s => pct >= s.startPct && pct < s.endPct) ?? segs[segs.length - 1];
-                    if (playingSeg && playingSeg.id !== playingSegmentIdRef.current) {
-                        playingSegmentIdRef.current = playingSeg.id;
-                        AudioEngineService.setPitch(trackId, playingSeg.pitch);
-                        AudioEngineService.setSpeed(trackId, playingSeg.speed);
-                        AudioEngineService.setEQ(trackId, { low: playingSeg.eqLow, mid: playingSeg.eqMid, high: playingSeg.eqHigh });
-                        // Sync UI to reflect the playing segment (effects not reconciled here)
-                        if (playingSeg.id !== activeSegmentIdRef.current) {
-                            activeSegmentIdRef.current = playingSeg.id;
-                            setActiveSegmentId(playingSeg.id);
-                            setPitch(playingSeg.pitch);
-                            setSpeed(playingSeg.speed);
-                            setFadeIn(playingSeg.fadeIn);
-                            setFadeOut(playingSeg.fadeOut);
-                            setEqLow(playingSeg.eqLow);
-                            setEqMid(playingSeg.eqMid);
-                            setEqHigh(playingSeg.eqHigh);
-                        }
+                // Per-segment fade-out: trigger when within fadeOut seconds of THIS segment's end,
+                // not the track end — so every segment's fade-out fires at the right time.
+                if (playingSeg && !fadeOutTriggeredRef.current && playingSeg.fadeOut > 0) {
+                    const segEndSec = playingSeg.endPct * track.audioBuffer.duration;
+                    const remaining = segEndSec - audioPosSec;
+                    if (remaining <= playingSeg.fadeOut && remaining > 0) {
+                        fadeOutTriggeredRef.current = true;
+                        applyFadeOut(remaining);
                     }
                 }
 
@@ -693,7 +716,7 @@ export default function TrackCard({
         };
         if (isPlaying) updatePlayhead();
         return () => cancelAnimationFrame(frameId);
-    }, [isPlaying, trackId, fadeOut, applyFadeOut]);
+    }, [isPlaying, trackId, applyFadeIn, applyFadeOut]);
 
     return (
         <div className="relative">
@@ -1054,15 +1077,43 @@ export default function TrackCard({
                                                 )}
                                             </span>
                                             <div className="flex items-center gap-3">
-                                                <span className="text-xs font-mono text-base-300 w-10 text-right">{Number(speed).toFixed(2)}x</span>
+                                                {speedInputVal !== null ? (
+                                                    <input
+                                                        type="text"
+                                                        value={speedInputVal}
+                                                        autoFocus
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        onChange={(e) => setSpeedInputVal(e.target.value)}
+                                                        onBlur={(e) => {
+                                                            e.stopPropagation();
+                                                            const parsed = parseFloat(speedInputVal);
+                                                            if (!isNaN(parsed)) setSpeedWithSync(Math.min(SPEED_MAX, Math.max(SPEED_MIN, parsed)));
+                                                            setSpeedInputVal(null);
+                                                        }}
+                                                        onKeyDown={(e) => {
+                                                            e.stopPropagation();
+                                                            if (e.key === 'Enter') e.target.blur();
+                                                            if (e.key === 'Escape') setSpeedInputVal(null);
+                                                        }}
+                                                        className="text-xs font-mono text-base-100 w-12 text-right bg-base-700 rounded px-1 outline-none border border-base-500"
+                                                    />
+                                                ) : (
+                                                    <span
+                                                        className="text-xs font-mono text-base-300 w-10 text-right cursor-text hover:text-base-100 transition-colors"
+                                                        title="Click to edit"
+                                                        onClick={(e) => { e.stopPropagation(); setSpeedInputVal(Number(speed).toFixed(2)); }}
+                                                    >
+                                                        {Number(speed).toFixed(2)}x
+                                                    </span>
+                                                )}
                                                 <input
                                                     type="range"
-                                                    min="0"
-                                                    max="7"
-                                                    step="1"
-                                                    value={speedToIndex(speed)}
+                                                    min={SPEED_MIN}
+                                                    max={SPEED_MAX}
+                                                    step="0.01"
+                                                    value={speed}
                                                     onClick={(e) => e.stopPropagation()}
-                                                    onChange={(e) => { e.stopPropagation(); setSpeedWithSync(SPEED_PRESETS[parseInt(e.target.value)]); }}
+                                                    onChange={(e) => { e.stopPropagation(); setSpeedWithSync(parseFloat(e.target.value)); }}
                                                     className="w-20 h-1 bg-base-700 rounded-lg appearance-none cursor-pointer accent-base-500 outline-none"
                                                 />
                                             </div>
