@@ -277,6 +277,9 @@ export function searchSpotify(query, types = ['track', 'playlist', 'artist', 'al
   return fetchSpotifyApi(`/search?q=${encodeURIComponent(query)}&type=${typeString}&limit=${limit}`);
 }
 
+export const getSpotifyTrack = (trackId) =>
+  fetchSpotifyApi(`/tracks/${trackId}`);
+
 // Default export preserves SpotifyContext spread compatibility
 const SpotifyService = {
   fetchSpotifyApi,
@@ -285,6 +288,7 @@ const SpotifyService = {
   getPlaylistTracks,
   getSavedTracks,
   searchSpotify,
+  getSpotifyTrack,
 };
 
 export default SpotifyService;

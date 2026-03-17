@@ -201,13 +201,21 @@ class AudioEngine {
             gainNode.gain.value = 1.0;
             nodes = { inputGain: gainNode, outputGain: gainNode };
             defaultParams = { gain: 1.0 };
+        } else if (effectType === 'filter') {
+            const filter = this.ctx.createBiquadFilter();
+            filter.type = 'highpass';
+            filter.frequency.value = 300;
+            nodes = { inputGain: filter, outputGain: filter };
+            defaultParams = { filterType: 'highpass', frequency: 300 };
         } else if (effectType === 'highpass') {
+            // Legacy — kept for backwards compatibility with saved workspaces
             const filter = this.ctx.createBiquadFilter();
             filter.type = 'highpass';
             filter.frequency.value = 300;
             nodes = { inputGain: filter, outputGain: filter };
             defaultParams = { frequency: 300 };
         } else if (effectType === 'lowpass') {
+            // Legacy — kept for backwards compatibility with saved workspaces
             const filter = this.ctx.createBiquadFilter();
             filter.type = 'lowpass';
             filter.frequency.value = 8000;
@@ -272,6 +280,9 @@ class AudioEngine {
             if (param === 'knee') effect.nodes.inputGain.knee.value = value;
         } else if (effect.type === 'volume') {
             if (param === 'gain') effect.nodes.inputGain.gain.value = value;
+        } else if (effect.type === 'filter') {
+            if (param === 'filterType') effect.nodes.inputGain.type = value;
+            if (param === 'frequency') effect.nodes.inputGain.frequency.value = value;
         } else if (effect.type === 'highpass' || effect.type === 'lowpass') {
             if (param === 'frequency') effect.nodes.inputGain.frequency.value = value;
         } else if (effect.type === 'panner') {
@@ -439,6 +450,11 @@ class AudioEngine {
             const gainNode = offlineCtx.createGain();
             gainNode.gain.value = effect.params.gain;
             return { input: gainNode, output: gainNode };
+        } else if (effect.type === 'filter') {
+            const filter = offlineCtx.createBiquadFilter();
+            filter.type = effect.params.filterType || 'highpass';
+            filter.frequency.value = effect.params.frequency;
+            return { input: filter, output: filter };
         } else if (effect.type === 'highpass') {
             const filter = offlineCtx.createBiquadFilter();
             filter.type = 'highpass';

@@ -65,3 +65,10 @@ export function spotifyConfirmMatch(id3Title, spotifyResults) {
     return intersection / union >= 0.5 ? match : null;
 }
 
+// Builds a Spotify field-filtered query for precision when both fields are known.
+export function buildSpotifyQuery(title, artist) {
+    if (title && artist) return `track:${title} artist:${artist}`;
+    if (title) return title;
+    if (artist) return artist;
+    return '';
+}

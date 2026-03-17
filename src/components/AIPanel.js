@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { ChevronRight, Sparkles, Send, History, Plus, Trash2, X, Bot } from 'lucide-react';
 import { Avatar, ScrollShadow } from '@heroui/react';
 import { useMix } from '../spotify/appContext';
@@ -276,7 +276,7 @@ export default function AIPanel() {
     // ─── Derived ──────────────────────────────────────────────────────────────
 
     const activeChat = chats.find(c => c.id === activeChatId) ?? null;
-    const messages   = activeChat?.messages ?? [];
+    const messages   = useMemo(() => activeChat?.messages ?? [], [activeChat]);
 
     // Replace the welcome bubble in the active chat when track count changes
     // (only while no real conversation has started)

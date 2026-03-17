@@ -122,6 +122,7 @@ export default function MainWorkspace() {
                             audioUrl={track.audioUrl}
                             beatPositions={track.beatPositions}
                             initialSegments={track.initialSegments}
+                            isMissing={track.isMissing ?? false}
                         />
                     </React.Fragment>
                 ))}

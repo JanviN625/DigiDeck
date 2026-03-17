@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronLeft, Library, AlertCircle, ChevronRight, Upload, Search, Loader2, Music, X, Trash2 } from 'lucide-react';
 import { Button } from '@heroui/react';
 import { useSpotify, useMix, useSpotifyConnect } from '../spotify/appContext';
-import { readId3Tags, spotifyConfirmMatch } from '../utils/helpers';
+import { readId3Tags, spotifyConfirmMatch, buildSpotifyQuery } from '../utils/helpers';
 import PlaylistModal from './PlaylistModal';
 import { auth, db, storage } from '../firebase/firebaseConfig';
 import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc } from 'firebase/firestore';
@@ -17,7 +17,7 @@ const SpotifyIcon = () => (
 
 export default function LibraryPanel() {
     const [isCollapsed, setIsCollapsed] = useState(false);
-    const { getUserPlaylists, searchSpotify } = useSpotify();
+    const { getUserPlaylists, searchSpotify, getSpotifyTrack } = useSpotify();
     const { handleAddTrack, tracks, handleUpdateTrack } = useMix();
     const { isSpotifyConnected, connectSpotify, disconnectSpotify, isConnecting } = useSpotifyConnect();
 
@@ -61,24 +61,33 @@ export default function LibraryPanel() {
 
         for (const track of localTracks) {
             try {
-                const query = track.artistName && track.artistName !== 'Local File'
-                    ? `${track.title} ${track.artistName}`
-                    : track.title;
-                const results = await searchSpotify(query, ['track'], 5);
-                const match = spotifyConfirmMatch(track.title, results?.tracks?.items);
-                if (match) {
-                    const updates = {};
-                    const spotifyArtist = match.artists?.map(a => a.name).join(', ');
-                    const spotifyArt = match.album?.images?.[0]?.url;
-                    if (spotifyArtist) updates.artistName = spotifyArtist;
-                    if (spotifyArt) updates.albumArt = spotifyArt;
-                    if (Object.keys(updates).length) handleUpdateTrack(track.id, updates);
+                const updates = {};
+                if (track.spotifyTrackId) {
+                    // AudD fingerprinted this track at upload — direct fetch, no fuzzy match
+                    const spotifyTrack = await getSpotifyTrack(track.spotifyTrackId);
+                    if (spotifyTrack) {
+                        const spotifyArtist = spotifyTrack.artists?.map(a => a.name).join(', ');
+                        const spotifyArt = spotifyTrack.album?.images?.[0]?.url;
+                        if (spotifyArtist) updates.artistName = spotifyArtist;
+                        if (spotifyArt) updates.albumArt = spotifyArt;
+                    }
+                } else {
+                    const spQuery = buildSpotifyQuery(track.title, track.artistName !== 'Local File' ? track.artistName : null);
+                    const results = await searchSpotify(spQuery, ['track'], 5);
+                    const match = spotifyConfirmMatch(track.title, results?.tracks?.items);
+                    if (match) {
+                        const spotifyArtist = match.artists?.map(a => a.name).join(', ');
+                        const spotifyArt = match.album?.images?.[0]?.url;
+                        if (spotifyArtist) updates.artistName = spotifyArtist;
+                        if (spotifyArt) updates.albumArt = spotifyArt;
+                    }
                 }
+                if (Object.keys(updates).length) handleUpdateTrack(track.id, updates);
             } catch {
                 // best-effort; a failed search for one track should not block others
             }
         }
-    }, [searchSpotify, handleUpdateTrack]);
+    }, [searchSpotify, getSpotifyTrack, handleUpdateTrack]);
 
     useEffect(() => {
         if (isSpotifyConnected) enrichLocalTracks();
@@ -133,16 +142,55 @@ export default function LibraryPanel() {
                 albumArt = await getDownloadURL(coverRef);
             }
 
-            // 4. Save enriched metadata to Firestore
-            await addDoc(collection(db, `users/${currentUser.uid}/uploads`), {
-                title: id3Title || file.name.replace(/\.[^/.]+$/, ""),
-                artistName: id3Artist || null,
-                albumArt: albumArt,
+            // 4. Audio fingerprinting — best-effort
+            let fingerprintResult = null;
+            try {
+                const fpRes = await fetch('/api/identifyTrack', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ audioUrl: downloadUrl }),
+                });
+                if (fpRes.ok) fingerprintResult = (await fpRes.json()).result || null;
+            } catch { /* fall through */ }
+
+            // 5. Filename parsing — only if fingerprinting found nothing
+            let parseResult = null;
+            if (!fingerprintResult) {
+                try {
+                    const parseRes = await fetch('/api/parseFilename', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ filename: file.name }),
+                    });
+                    if (parseRes.ok) parseResult = (await parseRes.json()).result || null;
+                } catch { /* fall through */ }
+            }
+
+            // 6. Merge: fingerprint > id3 > filename-parse > filename-stem
+            const filenameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+            const resolvedTitle    = fingerprintResult?.title   || id3Title    || parseResult?.title  || filenameWithoutExt;
+            const resolvedArtist   = fingerprintResult?.artist  || id3Artist   || parseResult?.artist || null;
+            const resolvedAlbumArt = fingerprintResult?.albumArt || albumArt   || null;
+            const resolvedSpotifyTrackId = fingerprintResult?.spotifyTrackId || null;
+
+            // 7. Save enriched metadata to Firestore
+            const docData = {
+                title: resolvedTitle,
+                artistName: resolvedArtist,
+                albumArt: resolvedAlbumArt,
                 fileName: file.name,
                 storagePath,
                 downloadUrl,
-                createdAt: timestamp
-            });
+                createdAt: timestamp,
+            };
+            if (resolvedSpotifyTrackId) docData.spotifyTrackId = resolvedSpotifyTrackId;
+            await addDoc(collection(db, `users/${currentUser.uid}/uploads`), docData);
+
+            // 8. Restore any workspace tracks that were waiting for this exact file
+            const missingTracks = tracks.filter(t => t.isMissing && t.localFileName === file.name);
+            for (const t of missingTracks) {
+                handleUpdateTrack(t.id, { isMissing: false, audioUrl: downloadUrl });
+            }
 
         } catch (err) {
             console.error("Upload failed", err);
@@ -155,8 +203,14 @@ export default function LibraryPanel() {
     const handleDeleteUpload = async (e, upload) => {
         e.stopPropagation();
         if (!currentUser) return;
-        
+
         try {
+            // Mark any workspace tracks using this file as missing
+            const affected = tracks.filter(t => t.spotifyId === 'local-' + upload.id);
+            for (const t of affected) {
+                handleUpdateTrack(t.id, { isMissing: true });
+            }
+
             // Delete from storage
             const storageRef = ref(storage, upload.storagePath);
             await deleteObject(storageRef);
@@ -171,22 +225,27 @@ export default function LibraryPanel() {
         let artistName = upload.artistName || 'Local File';
         let albumArt = upload.albumArt || null;
 
-        // Spotify enrichment — if connected, search for a matching track to get
-        // higher-quality artist name and album art. Falls through silently on failure.
-        if (isSpotifyConnected && upload.title) {
+        // Spotify enrichment — best-effort, falls through silently on failure.
+        if (isSpotifyConnected) {
             try {
-                const query = artistName !== 'Local File'
-                    ? `${upload.title} ${artistName}`
-                    : upload.title;
-                const results = await searchSpotify(query, ['track'], 5);
-                const match = spotifyConfirmMatch(upload.title, results?.tracks?.items);
-                if (match) {
-                    artistName = match.artists?.map(a => a.name).join(', ') || artistName;
-                    albumArt = match.album?.images?.[0]?.url || albumArt;
+                if (upload.spotifyTrackId) {
+                    // Direct fetch — AudD already identified this track
+                    const track = await getSpotifyTrack(upload.spotifyTrackId);
+                    if (track) {
+                        artistName = track.artists?.map(a => a.name).join(', ') || artistName;
+                        albumArt   = track.album?.images?.[0]?.url || albumArt;
+                    }
+                } else if (upload.title) {
+                    // Field-filtered search for precision when title (and optionally artist) are known
+                    const spQuery = buildSpotifyQuery(upload.title, upload.artistName);
+                    const results = await searchSpotify(spQuery, ['track'], 5);
+                    const match = spotifyConfirmMatch(upload.title, results?.tracks?.items);
+                    if (match) {
+                        artistName = match.artists?.map(a => a.name).join(', ') || artistName;
+                        albumArt   = match.album?.images?.[0]?.url || albumArt;
+                    }
                 }
-            } catch {
-                // best-effort; ID3 data is the fallback
-            }
+            } catch { /* best-effort */ }
         }
 
         handleAddTrack({
@@ -195,6 +254,7 @@ export default function LibraryPanel() {
             albumArt,
             spotifyId: 'local-' + upload.id,
             audioUrl: upload.downloadUrl,
+            localFileName: upload.fileName,
             isLocal: true,
             bpm: '[BPM]',
             trackKey: '[key]'
@@ -294,7 +354,14 @@ export default function LibraryPanel() {
                                     </div>
                                 )}
                             </Button>
-                            
+
+                            {currentUser && (
+                                <div className="flex items-start gap-1.5 mt-1 mb-1 px-0.5">
+                                    <AlertCircle size={11} className="text-base-450 shrink-0 mt-px" />
+                                    <span className="text-[10px] text-base-400 leading-snug">Name your file as the song title before uploading for best results.</span>
+                                </div>
+                            )}
+
                             {!currentUser ? (
                                 <div className="text-[11px] text-base-300 leading-snug text-center mt-2 px-2">Sign in to upload custom tracks.</div>
                             ) : userUploads.length === 0 ? (
