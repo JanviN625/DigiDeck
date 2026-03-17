@@ -284,4 +284,198 @@ describe('LibraryPanel — Spotify section (connected)', () => {
         fireEvent.click(screen.getByText('Close'));
         expect(screen.queryByTestId('playlist-modal')).not.toBeInTheDocument();
     });
+
+    it('shows an error message when getUserPlaylists throws', async () => {
+        mockGetUserPlaylists.mockRejectedValue(new Error('Network failure'));
+        render(<LibraryPanel />);
+        await waitFor(() => expect(screen.getByText('Network failure')).toBeInTheDocument());
+    });
+});
+
+// ─── Upload tip dismiss ───────────────────────────────────────────────────────
+
+describe('LibraryPanel — upload tip dismiss', () => {
+    it('shows the tip when user is logged in', async () => {
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+        expect(screen.getByText(/Name your file as the song title/i)).toBeInTheDocument();
+    });
+
+    it('hides the tip when the X button inside it is clicked', async () => {
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        const tipText = screen.getByText(/Name your file as the song title/i);
+        const tipContainer = tipText.closest('div');
+        const dismissBtn = tipContainer.querySelector('button');
+        fireEvent.click(dismissBtn);
+
+        expect(screen.queryByText(/Name your file as the song title/i)).not.toBeInTheDocument();
+    });
+});
+
+// ─── Delete upload ────────────────────────────────────────────────────────────
+
+describe('LibraryPanel — delete upload', () => {
+    const singleUpload = {
+        id: 'upload_1',
+        data: () => ({
+            title: 'Song To Delete',
+            artistName: 'Artist',
+            downloadUrl: 'https://cdn.example/song.mp3',
+            storagePath: 'uploads/uid_123/song.mp3',
+        }),
+    };
+
+    it('calls deleteObject and deleteDoc when delete button is clicked', async () => {
+        const { deleteObject } = require('firebase/storage');
+        const { deleteDoc } = require('firebase/firestore');
+        deleteObject.mockResolvedValueOnce();
+        deleteDoc.mockResolvedValueOnce();
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => {
+            capturedSnapshotCb({ forEach: (cb) => cb(singleUpload) });
+        });
+
+        const deleteBtn = screen.getByTitle('Delete file');
+        await act(async () => { fireEvent.click(deleteBtn); });
+
+        expect(deleteObject).toHaveBeenCalled();
+        expect(deleteDoc).toHaveBeenCalled();
+    });
+
+    it('does not propagate the click to the parent (no handleAddTrack call)', async () => {
+        const { deleteObject } = require('firebase/storage');
+        deleteObject.mockResolvedValueOnce();
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => {
+            capturedSnapshotCb({ forEach: (cb) => cb(singleUpload) });
+        });
+
+        const deleteBtn = screen.getByTitle('Delete file');
+        await act(async () => { fireEvent.click(deleteBtn); });
+
+        expect(mockHandleAddTrack).not.toHaveBeenCalled();
+    });
+});
+
+// ─── File upload ──────────────────────────────────────────────────────────────
+
+describe('LibraryPanel — file upload', () => {
+    beforeEach(() => {
+        global.fetch = jest.fn().mockResolvedValue({ ok: false }); // fingerprint step fails silently
+        // resetMocks:true clears .mockResolvedValue — restore readId3Tags here.
+        const { readId3Tags } = require('../utils/helpers');
+        readId3Tags.mockResolvedValue({ title: null, artist: null, albumArtBlob: null });
+    });
+    afterEach(() => { delete global.fetch; });
+
+    const triggerFileUpload = async (filename = 'track.mp3') => {
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['audio'], filename, { type: 'audio/mpeg' });
+        Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+        await act(async () => { fireEvent.change(fileInput); });
+    };
+
+    it('shows "Uploading..." while the upload is in progress', async () => {
+        const { uploadBytes } = require('firebase/storage');
+        uploadBytes.mockReturnValue(new Promise(() => {})); // never resolves
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        await triggerFileUpload();
+
+        expect(screen.getByText('Uploading...')).toBeInTheDocument();
+    });
+
+    it('calls uploadBytes with the correct storage path on upload', async () => {
+        const { uploadBytes, getDownloadURL, ref } = require('firebase/storage');
+        uploadBytes.mockResolvedValueOnce({});
+        getDownloadURL.mockResolvedValueOnce('https://cdn.example/track.mp3');
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        await triggerFileUpload('my-song.mp3');
+
+        expect(uploadBytes).toHaveBeenCalled();
+        expect(ref).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('my-song.mp3'));
+    });
+
+    it('does not trigger upload when no user is signed in', async () => {
+        const { uploadBytes } = require('firebase/storage');
+
+        render(<LibraryPanel />);
+        // No capturedAuthCb fired → currentUser is null
+
+        await triggerFileUpload();
+
+        expect(uploadBytes).not.toHaveBeenCalled();
+    });
+});
+
+// ─── Spotify search ───────────────────────────────────────────────────────────
+
+describe('LibraryPanel — Spotify search results', () => {
+    beforeEach(() => {
+        setupMocks({ spotify: { isSpotifyConnected: true } });
+    });
+
+    const typeQuery = async (text) => {
+        await waitFor(() => screen.getByPlaceholderText(/Search Library.../i));
+        fireEvent.change(screen.getByPlaceholderText(/Search Library.../i), {
+            target: { value: text },
+        });
+    };
+
+    it('shows tracks returned by searchSpotify after debounce', async () => {
+        mockSearchSpotify.mockResolvedValue({
+            tracks: {
+                items: [{ id: 't1', name: 'Found Track', artists: [{ name: 'DJ Test' }], album: { images: [] } }],
+            },
+        });
+        render(<LibraryPanel />);
+        await typeQuery('Found Track');
+        await waitFor(() => expect(screen.getByText('Found Track')).toBeInTheDocument(), { timeout: 1500 });
+        expect(screen.getByText('DJ Test')).toBeInTheDocument();
+    });
+
+    it('shows "No tracks found" when search returns empty items', async () => {
+        mockSearchSpotify.mockResolvedValue({ tracks: { items: [] } });
+        render(<LibraryPanel />);
+        await typeQuery('xyznothing999');
+        await waitFor(() => expect(screen.getByText(/No tracks found/i)).toBeInTheDocument(), { timeout: 1500 });
+    });
+
+    it('shows an error message when searchSpotify rejects', async () => {
+        mockSearchSpotify.mockRejectedValue(new Error('Search failed'));
+        render(<LibraryPanel />);
+        await typeQuery('error query');
+        await waitFor(() => expect(screen.getByText('Search failed')).toBeInTheDocument(), { timeout: 1500 });
+    });
+
+    it('clears results when the search input is cleared via X button', async () => {
+        mockSearchSpotify.mockResolvedValue({
+            tracks: {
+                items: [{ id: 't1', name: 'Found Track', artists: [], album: { images: [] } }],
+            },
+        });
+        render(<LibraryPanel />);
+        await typeQuery('Found Track');
+        await waitFor(() => screen.getByText('Found Track'), { timeout: 1500 });
+
+        // The X clear button appears when there is a search query
+        const clearBtn = screen.getByRole('button', { name: '' });
+        fireEvent.click(clearBtn);
+        await waitFor(() => expect(screen.queryByText('Found Track')).not.toBeInTheDocument());
+    });
 });

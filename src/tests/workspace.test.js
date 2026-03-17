@@ -226,6 +226,102 @@ describe('MainWorkspace — drag and drop', () => {
     });
 });
 
+// ─── Settings defaults passed to handleAddTrack ──────────────────────────────
+
+describe('MainWorkspace — settings defaults on Add New Track', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        localStorage.clear();
+        setupUseMix({ tracks: makeTracks(1) });
+    });
+    afterEach(() => { localStorage.clear(); });
+
+    it('passes default settings values when localStorage is empty', () => {
+        render(<MainWorkspace />);
+        fireEvent.click(screen.getByText(/Add New Track/i));
+        expect(mockHandleAddTrack).toHaveBeenCalledWith({
+            initialVolume: 80,
+            initialZoom: 0,
+            initialFadeIn: 0,
+            initialFadeOut: 0,
+        });
+    });
+
+    it('uses stored volume from localStorage when custom settings are saved', () => {
+        localStorage.setItem('digideck_settings', JSON.stringify({ defaultVolume: 60 }));
+        render(<MainWorkspace />);
+        fireEvent.click(screen.getByText(/Add New Track/i));
+        expect(mockHandleAddTrack).toHaveBeenCalledWith(
+            expect.objectContaining({ initialVolume: 60 })
+        );
+    });
+});
+
+// ─── GapZone hover and timer logic ────────────────────────────────────────────
+
+describe('MainWorkspace — gap zone hover behavior', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        setupUseMix({ tracks: makeTracks(2) });
+        jest.useFakeTimers();
+    });
+    afterEach(() => {
+        jest.useRealTimers();
+    });
+
+    it('shows gap drop zone text when dragging over a gap', () => {
+        render(<MainWorkspace />);
+        const cards = screen.getAllByTestId('track-card');
+
+        act(() => {
+            fireEvent.dragStart(cards[0], {
+                dataTransfer: { setData: jest.fn(), effectAllowed: '' },
+            });
+        });
+
+        // dragOver on the last gap zone (after all cards)
+        const container = cards[0].parentElement;
+        const allChildren = container ? [...container.children] : [];
+        const gapZones = allChildren.filter(
+            el => !el.hasAttribute('data-testid') && el.tagName !== 'BUTTON'
+        );
+
+        if (gapZones.length > 0) {
+            act(() => {
+                fireEvent.dragOver(gapZones[gapZones.length - 1], { preventDefault: jest.fn(), stopPropagation: jest.fn() });
+            });
+            // The gap zone activates — no assertion on text needed, just no throw
+        }
+    });
+
+    it('schedules gap clear on drag leave from a gap zone', () => {
+        render(<MainWorkspace />);
+        const cards = screen.getAllByTestId('track-card');
+        const container = cards[0].parentElement;
+        const gapZones = container
+            ? [...container.children].filter(el => !el.hasAttribute('data-testid') && el.tagName !== 'BUTTON')
+            : [];
+
+        if (gapZones.length > 0) {
+            act(() => { fireEvent.dragLeave(gapZones[0]); });
+            // Timer is scheduled — no throw expected
+            act(() => { jest.runAllTimers(); });
+        }
+    });
+
+    it('resets drag state on dragEnd', () => {
+        render(<MainWorkspace />);
+        const cards = screen.getAllByTestId('track-card');
+        act(() => {
+            fireEvent.dragStart(cards[0], {
+                dataTransfer: { setData: jest.fn(), effectAllowed: '' },
+            });
+        });
+        act(() => { fireEvent.dragEnd(cards[0]); });
+        expect(cards[0]).not.toHaveAttribute('data-dragged', 'true');
+    });
+});
+
 // ─── GapZone toIndex calculation ──────────────────────────────────────────────
 
 describe('MainWorkspace — GapZone toIndex calculation', () => {

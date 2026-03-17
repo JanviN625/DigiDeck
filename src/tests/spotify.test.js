@@ -12,12 +12,31 @@ import {
     getAccessToken,
     isLoggedIn,
 } from '../spotify/spotifyApi';
+import {
+    handleCallback,
+    refreshAccessToken as spotifyAuthRefresh,
+    getValidAccessToken as spotifyAuthGetValidToken,
+    logout,
+    getAccessToken as spotifyAuthGetToken,
+    isLoggedIn as spotifyAuthIsLoggedIn,
+    fetchUserProfile,
+} from '../spotify/spotifyAuth';
 import FirebaseService from '../firebase/firebase';
+import SpotifyAuthFirebaseService from '../firebase/FirebaseService';
 import { auth } from '../firebase/firebaseConfig';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
 jest.mock('../firebase/firebase', () => ({
+    __esModule: true,
+    default: {
+        saveSpotifyToken: jest.fn(),
+        getSpotifyToken: jest.fn(),
+        deleteSpotifyToken: jest.fn(),
+    },
+}));
+
+jest.mock('../firebase/FirebaseService', () => ({
     __esModule: true,
     default: {
         saveSpotifyToken: jest.fn(),
@@ -63,6 +82,11 @@ beforeEach(() => {
     const { doc, serverTimestamp } = require('firebase/firestore');
     doc.mockReturnValue('mock_ref');
     serverTimestamp.mockReturnValue('mock_timestamp');
+    // Restore FirebaseService (spotifyAuth.js's version) mocks.
+    const FSA = require('../firebase/FirebaseService').default;
+    FSA.saveSpotifyToken.mockResolvedValue(undefined);
+    FSA.getSpotifyToken.mockResolvedValue(null);
+    FSA.deleteSpotifyToken.mockResolvedValue(undefined);
 });
 
 afterEach(() => { delete global.fetch; });
@@ -522,5 +546,233 @@ describe('isLoggedIn', () => {
 
     it('returns false when no access token exists', () => {
         expect(isLoggedIn()).toBe(false);
+    });
+});
+
+// ─── spotifyAuth.js — alternative auth flow ───────────────────────────────────
+// These tests cover the legacy redirect-based auth (spotifyAuth.js) which
+// stores the user ID in localStorage and calls FirebaseService directly.
+
+describe('spotifyAuth — handleCallback', () => {
+    beforeEach(() => {
+        localStorage.setItem('code_verifier', 'mock_verifier');
+    });
+
+    it('returns false when URL has an error param', async () => {
+        Object.defineProperty(window, 'location', {
+            writable: true,
+            value: { ...window.location, search: '?error=access_denied', pathname: '/' },
+        });
+        const result = await handleCallback();
+        expect(result).toBe(false);
+    });
+
+    it('returns false when no code is present in the URL', async () => {
+        Object.defineProperty(window, 'location', {
+            writable: true,
+            value: { ...window.location, search: '', pathname: '/' },
+        });
+        const result = await handleCallback();
+        expect(result).toBe(false);
+    });
+
+    it('returns false when code_verifier is missing from localStorage', async () => {
+        localStorage.removeItem('code_verifier');
+        Object.defineProperty(window, 'location', {
+            writable: true,
+            value: { ...window.location, search: '?code=auth_code', pathname: '/' },
+        });
+        const result = await handleCallback();
+        expect(result).toBe(false);
+        expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('returns false when the token exchange request fails', async () => {
+        Object.defineProperty(window, 'location', {
+            writable: true,
+            value: { ...window.location, search: '?code=auth_code', pathname: '/' },
+        });
+        fetch.mockResolvedValueOnce({ ok: false, json: async () => ({ error: 'invalid_grant' }) });
+        const result = await handleCallback();
+        expect(result).toBe(false);
+    });
+
+    it('exchanges the code, saves tokens, and returns true on success', async () => {
+        Object.defineProperty(window, 'location', {
+            writable: true,
+            value: { ...window.location, search: '?code=auth_code', pathname: '/' },
+        });
+        // Token exchange then profile fetch
+        fetch
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 }) })
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'spotify_uid_123' }) });
+
+        const result = await handleCallback();
+
+        expect(result).toBe(true);
+        expect(localStorage.getItem('access_token')).toBe('at');
+        expect(localStorage.getItem('spotify_user_id')).toBe('spotify_uid_123');
+        expect(SpotifyAuthFirebaseService.saveSpotifyToken).toHaveBeenCalledWith(
+            'spotify_uid_123',
+            expect.objectContaining({ access_token: 'at', refresh_token: 'rt' })
+        );
+    });
+
+    it('returns false when the profile fetch after token exchange fails', async () => {
+        Object.defineProperty(window, 'location', {
+            writable: true,
+            value: { ...window.location, search: '?code=auth_code', pathname: '/' },
+        });
+        fetch
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 }) })
+            .mockResolvedValueOnce({ ok: false });
+
+        const result = await handleCallback();
+        expect(result).toBe(false);
+    });
+});
+
+describe('spotifyAuth — logout', () => {
+    it('clears all Spotify keys from localStorage', () => {
+        localStorage.setItem('access_token', 'tok');
+        localStorage.setItem('code_verifier', 'cv');
+        localStorage.setItem('spotify_expires_at', '9999');
+        localStorage.setItem('spotify_user_id', 'uid');
+
+        logout();
+
+        expect(localStorage.getItem('access_token')).toBeNull();
+        expect(localStorage.getItem('code_verifier')).toBeNull();
+        expect(localStorage.getItem('spotify_expires_at')).toBeNull();
+        expect(localStorage.getItem('spotify_user_id')).toBeNull();
+    });
+
+    it('calls deleteSpotifyToken when a user_id is stored', () => {
+        localStorage.setItem('spotify_user_id', 'uid_999');
+        logout();
+        expect(SpotifyAuthFirebaseService.deleteSpotifyToken).toHaveBeenCalledWith('uid_999');
+    });
+
+    it('does not call deleteSpotifyToken when no user_id is stored', () => {
+        logout();
+        expect(SpotifyAuthFirebaseService.deleteSpotifyToken).not.toHaveBeenCalled();
+    });
+});
+
+describe('spotifyAuth — getAccessToken / isLoggedIn', () => {
+    it('getAccessToken returns the token from localStorage', () => {
+        localStorage.setItem('access_token', 'my_tok');
+        expect(spotifyAuthGetToken()).toBe('my_tok');
+    });
+
+    it('getAccessToken returns null when no token is stored', () => {
+        expect(spotifyAuthGetToken()).toBeNull();
+    });
+
+    it('isLoggedIn returns true when a token is stored', () => {
+        localStorage.setItem('access_token', 'tok');
+        expect(spotifyAuthIsLoggedIn()).toBe(true);
+    });
+
+    it('isLoggedIn returns false when no token is stored', () => {
+        expect(spotifyAuthIsLoggedIn()).toBe(false);
+    });
+});
+
+describe('spotifyAuth — getValidAccessToken', () => {
+    it('returns the cached token when it is not yet expired', async () => {
+        localStorage.setItem('access_token', 'cached');
+        localStorage.setItem('spotify_expires_at', String(Date.now() + 3600000));
+        const token = await spotifyAuthGetValidToken();
+        expect(token).toBe('cached');
+        expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('calls refreshAccessToken when there is no expiry stored', async () => {
+        // No expiry → expired → refresh path → no user_id → returns null
+        const token = await spotifyAuthGetValidToken();
+        expect(token).toBeNull();
+    });
+
+    it('calls refreshAccessToken when the token is expired', async () => {
+        localStorage.setItem('spotify_expires_at', String(Date.now() - 1000));
+        const token = await spotifyAuthGetValidToken();
+        expect(token).toBeNull(); // no user_id stored → refresh returns null
+    });
+});
+
+describe('spotifyAuth — refreshAccessToken', () => {
+    it('returns null when no spotify_user_id is in localStorage', async () => {
+        const result = await spotifyAuthRefresh();
+        expect(result).toBeNull();
+        expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('returns null when no refresh_token is stored in Firebase', async () => {
+        localStorage.setItem('spotify_user_id', 'uid_123');
+        SpotifyAuthFirebaseService.getSpotifyToken.mockResolvedValueOnce(null);
+        const result = await spotifyAuthRefresh();
+        expect(result).toBeNull();
+    });
+
+    it('returns null when the refresh request fails', async () => {
+        localStorage.setItem('spotify_user_id', 'uid_123');
+        SpotifyAuthFirebaseService.getSpotifyToken.mockResolvedValueOnce({ refresh_token: 'rt' });
+        fetch.mockResolvedValueOnce({ ok: false, json: async () => ({ error: 'invalid_grant' }) });
+        const result = await spotifyAuthRefresh();
+        expect(result).toBeNull();
+    });
+
+    it('fetches a new token and saves it on success', async () => {
+        localStorage.setItem('spotify_user_id', 'uid_123');
+        SpotifyAuthFirebaseService.getSpotifyToken.mockResolvedValueOnce({ refresh_token: 'old_rt' });
+        fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'new_at', expires_in: 3600 }) });
+
+        const result = await spotifyAuthRefresh();
+
+        expect(result).toBe('new_at');
+        expect(localStorage.getItem('access_token')).toBe('new_at');
+        expect(SpotifyAuthFirebaseService.saveSpotifyToken).toHaveBeenCalledWith(
+            'uid_123',
+            expect.objectContaining({ access_token: 'new_at' })
+        );
+    });
+
+    it('falls back to the stored refresh token when none is returned', async () => {
+        localStorage.setItem('spotify_user_id', 'uid_123');
+        SpotifyAuthFirebaseService.getSpotifyToken.mockResolvedValueOnce({ refresh_token: 'old_rt' });
+        fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'new_at', expires_in: 3600 }) });
+
+        await spotifyAuthRefresh();
+
+        expect(SpotifyAuthFirebaseService.saveSpotifyToken).toHaveBeenCalledWith(
+            'uid_123',
+            expect.objectContaining({ refresh_token: 'old_rt' })
+        );
+    });
+});
+
+describe('spotifyAuth — fetchUserProfile', () => {
+    it('returns null when no valid access token is available', async () => {
+        // No token in localStorage → getValidAccessToken returns null
+        const result = await fetchUserProfile();
+        expect(result).toBeNull();
+    });
+
+    it('returns null when the /me endpoint returns a non-ok response', async () => {
+        localStorage.setItem('access_token', 'tok');
+        localStorage.setItem('spotify_expires_at', String(Date.now() + 3600000));
+        fetch.mockResolvedValueOnce({ ok: false, status: 401 });
+        const result = await fetchUserProfile();
+        expect(result).toBeNull();
+    });
+
+    it('returns the parsed profile JSON on success', async () => {
+        localStorage.setItem('access_token', 'tok');
+        localStorage.setItem('spotify_expires_at', String(Date.now() + 3600000));
+        const profile = { id: 'user_1', display_name: 'DJ Test' };
+        fetch.mockResolvedValueOnce({ ok: true, json: async () => profile });
+        const result = await fetchUserProfile();
+        expect(result).toEqual(profile);
     });
 });

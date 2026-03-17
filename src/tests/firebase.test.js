@@ -6,14 +6,16 @@ import {
     createUserWithEmailAndPassword,
     signOut,
     updateProfile,
+    updateEmail,
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, getDocs, collection, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { db } from '../firebase/firebaseConfig';
 import { renderHook, act } from '@testing-library/react';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
-jest.mock('../firebase/firebaseConfig', () => ({ auth: {}, db: {} }));
+jest.mock('../firebase/firebaseConfig', () => ({ auth: {}, db: {}, storage: {} }));
 
 jest.mock('firebase/firestore', () => ({
     doc: jest.fn((_db, ...path) => path.join('/')),
@@ -33,6 +35,14 @@ jest.mock('firebase/auth', () => ({
     signInWithEmailAndPassword: jest.fn(),
     signOut: jest.fn(),
     updateProfile: jest.fn(),
+    updateEmail: jest.fn(),
+}));
+
+jest.mock('firebase/storage', () => ({
+    ref: jest.fn(),
+    uploadBytes: jest.fn(),
+    getDownloadURL: jest.fn(),
+    deleteObject: jest.fn(),
 }));
 
 // ─── Shared fixtures ──────────────────────────────────────────────────────────
@@ -63,6 +73,12 @@ beforeEach(() => {
         capturedAuthCallback = cb;
         return jest.fn();
     });
+
+    const { ref, uploadBytes, getDownloadURL, deleteObject } = require('firebase/storage');
+    ref.mockImplementation((_storage, path) => path);
+    uploadBytes.mockResolvedValue({});
+    getDownloadURL.mockResolvedValue('https://storage.example/avatar.jpg');
+    deleteObject.mockResolvedValue();
 });
 
 // ─── FirebaseService — Spotify Token Management ───────────────────────────────
@@ -391,5 +407,226 @@ describe('useFirebaseAuth — firebase-profile-updated event', () => {
         });
 
         expect(result.current.user).toBeNull();
+    });
+});
+
+// ─── useFirebaseAuth — updateDisplayName ─────────────────────────────────────
+
+describe('useFirebaseAuth — updateDisplayName', () => {
+    beforeEach(() => {
+        const { auth } = require('../firebase/firebaseConfig');
+        auth.currentUser = { uid: mockUser.uid, reload: jest.fn().mockResolvedValue(undefined) };
+    });
+
+    it('calls updateProfile with the new display name', async () => {
+        updateProfile.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await act(async () => { await result.current.updateDisplayName('New Name'); });
+
+        expect(updateProfile).toHaveBeenCalledWith(
+            expect.objectContaining({ uid: mockUser.uid }),
+            { displayName: 'New Name' }
+        );
+    });
+
+    it('writes the new name to Firestore with merge', async () => {
+        updateProfile.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await act(async () => { await result.current.updateDisplayName('New Name'); });
+
+        expect(setDoc).toHaveBeenCalledWith(
+            `users/${mockUser.uid}`,
+            { displayName: 'New Name' },
+            { merge: true }
+        );
+    });
+
+    it('dispatches firebase-profile-updated event', async () => {
+        updateProfile.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+        const dispatchSpy = jest.spyOn(window, 'dispatchEvent');
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await act(async () => { await result.current.updateDisplayName('Name'); });
+
+        expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'firebase-profile-updated' }));
+        dispatchSpy.mockRestore();
+    });
+});
+
+// ─── useFirebaseAuth — updateProfilePhoto ────────────────────────────────────
+
+describe('useFirebaseAuth — updateProfilePhoto', () => {
+    beforeEach(() => {
+        const { auth } = require('../firebase/firebaseConfig');
+        auth.currentUser = { uid: mockUser.uid, reload: jest.fn().mockResolvedValue(undefined) };
+    });
+
+    it('throws when file exceeds 5 MB', async () => {
+        const { result } = renderHook(() => useFirebaseAuth());
+        const bigFile = { size: 6 * 1024 * 1024 };
+
+        await expect(act(async () => {
+            await result.current.updateProfilePhoto(bigFile);
+        })).rejects.toThrow('Image must be smaller than 5 MB.');
+    });
+
+    it('uploads to the correct storage path', async () => {
+        updateProfile.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+        const { ref, uploadBytes } = require('firebase/storage');
+        const smallFile = { size: 1 * 1024 * 1024 };
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await act(async () => { await result.current.updateProfilePhoto(smallFile); });
+
+        expect(ref).toHaveBeenCalledWith({}, `avatars/${mockUser.uid}/profile`);
+        expect(uploadBytes).toHaveBeenCalledTimes(1);
+    });
+
+    it('updates Firebase Auth profile with the download URL', async () => {
+        updateProfile.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+        const smallFile = { size: 1 * 1024 * 1024 };
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await act(async () => { await result.current.updateProfilePhoto(smallFile); });
+
+        expect(updateProfile).toHaveBeenCalledWith(
+            expect.anything(),
+            { photoURL: 'https://storage.example/avatar.jpg' }
+        );
+    });
+
+    it('returns the photo URL', async () => {
+        updateProfile.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+        const smallFile = { size: 1 * 1024 * 1024 };
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        let url;
+        await act(async () => { url = await result.current.updateProfilePhoto(smallFile); });
+
+        expect(url).toBe('https://storage.example/avatar.jpg');
+    });
+});
+
+// ─── useFirebaseAuth — removeProfilePhoto ────────────────────────────────────
+
+describe('useFirebaseAuth — removeProfilePhoto', () => {
+    beforeEach(() => {
+        const { auth } = require('../firebase/firebaseConfig');
+        auth.currentUser = { uid: mockUser.uid, reload: jest.fn().mockResolvedValue(undefined) };
+    });
+
+    it('attempts to delete the storage file', async () => {
+        updateProfile.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+        const { deleteObject } = require('firebase/storage');
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await act(async () => { await result.current.removeProfilePhoto(); });
+
+        expect(deleteObject).toHaveBeenCalledTimes(1);
+    });
+
+    it('still completes even if the storage file does not exist', async () => {
+        const { deleteObject } = require('firebase/storage');
+        deleteObject.mockRejectedValueOnce(new Error('storage/object-not-found'));
+        updateProfile.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await expect(act(async () => {
+            await result.current.removeProfilePhoto();
+        })).resolves.not.toThrow();
+    });
+
+    it('sets photoURL to null in Firebase Auth', async () => {
+        updateProfile.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await act(async () => { await result.current.removeProfilePhoto(); });
+
+        expect(updateProfile).toHaveBeenCalledWith(
+            expect.anything(),
+            { photoURL: null }
+        );
+    });
+
+    it('sets avatarUrl to null in Firestore', async () => {
+        updateProfile.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await act(async () => { await result.current.removeProfilePhoto(); });
+
+        expect(setDoc).toHaveBeenCalledWith(
+            `users/${mockUser.uid}`,
+            { avatarUrl: null },
+            { merge: true }
+        );
+    });
+});
+
+// ─── useFirebaseAuth — updateUserEmail ───────────────────────────────────────
+
+describe('useFirebaseAuth — updateUserEmail', () => {
+    beforeEach(() => {
+        const { auth } = require('../firebase/firebaseConfig');
+        auth.currentUser = { uid: mockUser.uid, email: mockUser.email, reload: jest.fn().mockResolvedValue(undefined) };
+    });
+
+    it('calls updateEmail with the new address', async () => {
+        updateEmail.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await act(async () => { await result.current.updateUserEmail('new@example.com'); });
+
+        expect(updateEmail).toHaveBeenCalledWith(
+            expect.objectContaining({ uid: mockUser.uid }),
+            'new@example.com'
+        );
+    });
+
+    it('writes the new email to Firestore with merge', async () => {
+        updateEmail.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await act(async () => { await result.current.updateUserEmail('new@example.com'); });
+
+        expect(setDoc).toHaveBeenCalledWith(
+            `users/${mockUser.uid}`,
+            { email: 'new@example.com' },
+            { merge: true }
+        );
+    });
+
+    it('dispatches firebase-profile-updated event on success', async () => {
+        updateEmail.mockResolvedValueOnce();
+        setDoc.mockResolvedValueOnce();
+        const dispatchSpy = jest.spyOn(window, 'dispatchEvent');
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await act(async () => { await result.current.updateUserEmail('new@example.com'); });
+
+        expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'firebase-profile-updated' }));
+        dispatchSpy.mockRestore();
+    });
+
+    it('propagates errors thrown by updateEmail', async () => {
+        updateEmail.mockRejectedValueOnce(Object.assign(new Error('requires-recent-login'), { code: 'auth/requires-recent-login' }));
+
+        const { result } = renderHook(() => useFirebaseAuth());
+        await expect(act(async () => {
+            await result.current.updateUserEmail('new@example.com');
+        })).rejects.toThrow('requires-recent-login');
     });
 });

@@ -7,6 +7,7 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged,
   updateProfile,
+  updateEmail,
 } from 'firebase/auth';
 import {
   doc,
@@ -17,11 +18,22 @@ import {
   deleteDoc,
   serverTimestamp,
 } from 'firebase/firestore';
-import { auth, db } from './firebaseConfig';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { auth, db, storage } from './firebaseConfig';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const userRef = (userId, ...path) => doc(db, 'users', userId, ...path);
+
+export const AUTH_ERRORS = {
+  'auth/wrong-password':        'Current password is incorrect.',
+  'auth/invalid-credential':    'Current password is incorrect.',
+  'auth/too-many-requests':     'Too many attempts. Please try again later.',
+  'auth/email-already-in-use':  'That email is already in use.',
+  'auth/requires-recent-login': 'Please sign out and back in to make this change.',
+};
+
+export const friendlyError = (err) => AUTH_ERRORS[err.code] || err.message || 'Update failed.';
 
 // ─── FirebaseService ──────────────────────────────────────────────────────────
 
@@ -145,5 +157,45 @@ export const useFirebaseAuth = () => {
     await firebaseSignOut(auth);
   };
 
-  return { user, loading, loginWithGoogle, loginWithEmail, signUpWithEmail, signOut };
+  const updateDisplayName = async (newDisplayName) => {
+    const uid = auth.currentUser.uid;
+    await updateProfile(auth.currentUser, { displayName: newDisplayName });
+    await setDoc(userRef(uid), { displayName: newDisplayName }, { merge: true });
+    window.dispatchEvent(new Event('firebase-profile-updated'));
+  };
+
+  const updateProfilePhoto = async (file) => {
+    if (file.size > 5 * 1024 * 1024) throw new Error('Image must be smaller than 5 MB.');
+    const uid = auth.currentUser.uid;
+    const storageRef = ref(storage, `avatars/${uid}/profile`);
+    await uploadBytes(storageRef, file);
+    const photoURL = await getDownloadURL(storageRef);
+    await updateProfile(auth.currentUser, { photoURL });
+    await setDoc(userRef(uid), { avatarUrl: photoURL }, { merge: true });
+    window.dispatchEvent(new Event('firebase-profile-updated'));
+    return photoURL;
+  };
+
+  const removeProfilePhoto = async () => {
+    const uid = auth.currentUser.uid;
+    try {
+      await deleteObject(ref(storage, `avatars/${uid}/profile`));
+    } catch {}
+    await updateProfile(auth.currentUser, { photoURL: null });
+    await setDoc(userRef(uid), { avatarUrl: null }, { merge: true });
+    window.dispatchEvent(new Event('firebase-profile-updated'));
+  };
+
+  const updateUserEmail = async (newEmail) => {
+    const currentUser = auth.currentUser;
+    await updateEmail(currentUser, newEmail);
+    await setDoc(userRef(currentUser.uid), { email: newEmail }, { merge: true });
+    window.dispatchEvent(new Event('firebase-profile-updated'));
+  };
+
+  return {
+    user, loading, loginWithGoogle, loginWithEmail, signUpWithEmail, signOut,
+    updateDisplayName, updateProfilePhoto, removeProfilePhoto,
+    updateUserEmail,
+  };
 };

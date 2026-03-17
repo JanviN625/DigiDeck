@@ -7,11 +7,20 @@ import AudioEngineService from '../audio/AudioEngine';
 import WaveSurfer from 'wavesurfer.js';
 import { analyzeAudioBuffer } from '../audio/essentiaAnalyzer';
 import { useMix } from '../spotify/appContext';
+import { useSettings, matchesKeybind } from '../utils/useSettings';
 
 const SPEED_MIN = 0.25;
 const SPEED_MAX = 2.0;
 
 const parseFade = (v) => { const n = parseFloat(String(v)); return isNaN(n) || n < 0 ? 0 : n; };
+
+// Format seconds → MM:SS e.g. 02:30
+const formatTimestamp = (seconds) => {
+    const total = Math.floor(seconds || 0);
+    const sec = total % 60;
+    const min = Math.floor(total / 60);
+    return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+};
 
 function FadeField({ label, value, onChange, onReset }) {
     const [raw, setRaw] = React.useState(String(value));
@@ -140,9 +149,11 @@ export default function TrackCard({
     beatPositions = null,
     isMissing = false,
 }) {
+    const { settings } = useSettings();
     const [isExpanded, setIsExpanded] = useState(initiallyExpanded);
     const [trackName, setTrackName] = useState(title);
     const [isEditing, setIsEditing] = useState(false);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [missingDismissed, setMissingDismissed] = useState(false);
     const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
 
@@ -156,6 +167,7 @@ export default function TrackCard({
     const [fadeIn, setFadeIn] = useState(() => parseFade(initialFadeIn));
     const [fadeOut, setFadeOut] = useState(() => parseFade(initialFadeOut));
     const [audioDuration, setAudioDuration] = useState(0);
+    const [displayTimeSec, setDisplayTimeSec] = useState(0);
     const [containerWidth, setContainerWidth] = useState(0);
     const [zoom, setZoom] = useState(initialZoom);
     // Derived synchronously — no state lag when zoom changes.
@@ -187,6 +199,7 @@ export default function TrackCard({
     const wsScrollRef = useRef(null);
     const wsScrollCleanupRef = useRef(null);
     const isHoveredRef = useRef(false);
+    const lastTimestampUpdateRef = useRef(0);
     const activeSegmentIdRef = useRef((initialSegments ?? [makeDefaultSegment(0)])[0]?.id ?? 0);
     const segmentsRef = useRef(null);
     const playingSegmentIdRef = useRef(null);
@@ -348,6 +361,7 @@ export default function TrackCard({
                             activateSegmentRef.current?.(clickedSeg.id);
                         }
                     }
+                    setDisplayTimeSec(newTime);
                     seek(newTime);
                 });
 
@@ -608,14 +622,14 @@ export default function TrackCard({
     useEffect(() => {
         if (!isExpanded || !audioUrl) return;
         const onKeyDown = (e) => {
-            if (e.ctrlKey && e.key === 's' && isHoveredRef.current) {
+            if (matchesKeybind(e, settings.keybinds.splitAtPlayhead) && isHoveredRef.current) {
                 e.preventDefault();
                 handleSplit();
             }
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [isExpanded, audioUrl, handleSplit]);
+    }, [isExpanded, audioUrl, handleSplit, settings.keybinds.splitAtPlayhead]);
 
     // Play Pause Sync
     useEffect(() => {
@@ -676,6 +690,13 @@ export default function TrackCard({
                 const displayProportion = Math.min(1, audioPosSec / track.audioBuffer.duration);
                 currentTimePctRef.current = displayProportion;
                 wavesurferRef.current.seekTo(displayProportion);
+
+                // Throttle timestamp display to ~10 fps to avoid excessive re-renders.
+                const now = performance.now();
+                if (now - lastTimestampUpdateRef.current >= 100) {
+                    lastTimestampUpdateRef.current = now;
+                    setDisplayTimeSec(audioPosSec);
+                }
 
                 // Determine which segment is currently playing — used for both
                 // boundary detection and per-segment fade logic below.
@@ -870,16 +891,34 @@ export default function TrackCard({
                                 <Copy size={14} />
                             </button>
                             <div className="w-px h-4 bg-base-700 mx-0.5"></div>
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    onDelete && onDelete();
-                                }}
-                                className="p-1.5 rounded transition-colors text-base-500 hover:text-base-50 hover:bg-base-400 active:scale-95"
-                                title="Delete track"
-                            >
-                                <Trash2 size={14} />
-                            </button>
+                            {showDeleteConfirm ? (
+                                <div className="flex items-center gap-1.5 animate-in fade-in duration-150">
+                                    <span className="text-xs text-base-400">Remove track?</span>
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); onDelete && onDelete(); }}
+                                        className="text-xs font-semibold text-red-400 hover:text-red-300 px-2 py-0.5 rounded bg-red-900/20 hover:bg-red-900/40 transition-colors"
+                                    >
+                                        Remove
+                                    </button>
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(false); }}
+                                        className="text-xs text-base-500 hover:text-base-300 px-2 py-0.5 rounded transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            ) : (
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        settings.confirmBeforeDelete ? setShowDeleteConfirm(true) : onDelete && onDelete();
+                                    }}
+                                    className="p-1.5 rounded transition-colors text-base-500 hover:text-base-50 hover:bg-base-400 active:scale-95"
+                                    title="Delete track"
+                                >
+                                    <Trash2 size={14} />
+                                </button>
+                            )}
                         </div>
                         <button
                             onClick={(e) => {
@@ -1075,17 +1114,25 @@ export default function TrackCard({
                             </div>
                         </div>
 
-                        {/* Zoom Slider — short, pinned to the right */}
-                        <div className="flex items-center gap-2 shrink-0 self-end" onClick={(e) => e.stopPropagation()}>
-                            <ZoomIn size={12} className="text-base-300 shrink-0" />
-                            <input
-                                type="range"
-                                min="0"
-                                max="100"
-                                value={zoom}
-                                onChange={(e) => setZoom(Number(e.target.value))}
-                                className="w-24 h-1 bg-base-700 rounded-lg appearance-none cursor-pointer accent-base-500 outline-none"
-                            />
+                        {/* Bottom row — timestamp (left) and zoom slider (right) */}
+                        <div className="flex items-center justify-between w-full" onClick={(e) => e.stopPropagation()}>
+                            {/* Playhead / duration timestamp */}
+                            <span className="text-xs font-mono text-base-400 tabular-nums shrink-0 select-none">
+                                {formatTimestamp(displayTimeSec)}&nbsp;–&nbsp;{formatTimestamp(audioDuration)}
+                            </span>
+
+                            {/* Zoom Slider */}
+                            <div className="flex items-center gap-2 shrink-0">
+                                <ZoomIn size={12} className="text-base-300 shrink-0" />
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="100"
+                                    value={zoom}
+                                    onChange={(e) => setZoom(Number(e.target.value))}
+                                    className="w-24 h-1 bg-base-700 rounded-lg appearance-none cursor-pointer accent-base-500 outline-none"
+                                />
+                            </div>
                         </div>
                     </div>
                 </div>}

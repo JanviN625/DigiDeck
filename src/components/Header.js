@@ -1,19 +1,36 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Pencil, Play, Pause, Square } from 'lucide-react';
 import { Avatar, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, DropdownSection, Spinner } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
 import { useFirebaseAuth } from '../firebase/firebase';
-import { useSpotifyConnect, useMix } from '../spotify/appContext';
+import { useMix } from '../spotify/appContext';
 import AudioEngineService, { audioBufferToWAV } from '../audio/AudioEngine';
+import { AccountModal, SettingsModal } from './ProfileModal';
+import { useSettings, matchesKeybind } from '../utils/useSettings';
 
 export default function Header() {
     const { user, signOut } = useFirebaseAuth();
-    const { isSpotifyConnected, connectSpotify, disconnectSpotify } = useSpotifyConnect();
     const { tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop } = useMix();
+    const { settings } = useSettings();
     const [projectName, setProjectName] = useState('Untitled project');
     const [isEditingProject, setIsEditingProject] = useState(false);
     const [renderingFor, setRenderingFor] = useState(null); // null | 'preview' | 'export'
     const previewSourceRef = useRef(null);
+    const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+    const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+
+    useEffect(() => {
+        const handleKeydown = (e) => {
+            const tag = document.activeElement?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
+            if (matchesKeybind(e, settings.keybinds.playPause)) {
+                e.preventDefault();
+                setUniversalIsPlaying(v => !v);
+            }
+        };
+        window.addEventListener('keydown', handleKeydown);
+        return () => window.removeEventListener('keydown', handleKeydown);
+    }, [settings.keybinds.playPause, setUniversalIsPlaying]);
 
     const handleMixPreview = async () => {
         if (renderingFor) return;
@@ -84,6 +101,7 @@ export default function Header() {
     };
 
     return (
+        <>
         <header className="h-16 bg-base-800 border-b border-base-700 flex items-center justify-between px-6 shrink-0 relative">
 
             {/* Left — logo + project name */}
@@ -207,21 +225,12 @@ export default function Header() {
                             <p className="text-xs text-base-400 truncate">{user?.email}</p>
                         </DropdownItem>
 
-                        <DropdownItem key="account" textValue="Account Info" className="hover:bg-base-700 hover:text-base-50 text-sm py-2">
+                        <DropdownItem key="account" textValue="Account Info" onPress={() => setIsAccountModalOpen(true)} className="hover:bg-base-700 hover:text-base-50 text-sm py-2">
                             Account info
                         </DropdownItem>
 
-                        <DropdownItem key="settings" textValue="Settings" className="hover:bg-base-700 hover:text-base-50 text-sm py-2">
+                        <DropdownItem key="settings" textValue="Settings" onPress={() => setIsSettingsModalOpen(true)} className="hover:bg-base-700 hover:text-base-50 text-sm py-2">
                             Settings
-                        </DropdownItem>
-
-                        <DropdownItem
-                            key="spotify"
-                            textValue={isSpotifyConnected ? 'Disconnect Spotify' : 'Connect Spotify'}
-                            onPress={isSpotifyConnected ? disconnectSpotify : connectSpotify}
-                            className="hover:bg-base-700 hover:text-base-50 text-sm py-2"
-                        >
-                            {isSpotifyConnected ? 'Disconnect Spotify' : 'Connect Spotify'}
                         </DropdownItem>
 
                         <DropdownSection showDivider>
@@ -238,5 +247,8 @@ export default function Header() {
                 </Dropdown>
             </div>
         </header>
+        <AccountModal  isOpen={isAccountModalOpen}  onClose={() => setIsAccountModalOpen(false)} />
+        <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
+        </>
     );
 }

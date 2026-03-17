@@ -37,6 +37,7 @@ export default function LibraryPanel() {
     const [uploadingFiles, setUploadingFiles] = useState(false);
     const [userUploads, setUserUploads] = useState([]);
     const [currentUser, setCurrentUser] = useState(null);
+    const [uploadTipDismissed, setUploadTipDismissed] = useState(false);
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -355,10 +356,16 @@ export default function LibraryPanel() {
                                 )}
                             </Button>
 
-                            {currentUser && (
-                                <div className="flex items-start gap-1.5 mt-1 mb-1 px-0.5">
-                                    <AlertCircle size={11} className="text-base-450 shrink-0 mt-px" />
-                                    <span className="text-[10px] text-base-400 leading-snug">Name your file as the song title before uploading for best results.</span>
+                            {currentUser && !uploadTipDismissed && (
+                                <div className="flex items-center gap-1.5 mt-1 mb-1 px-0.5">
+                                    <AlertCircle size={11} className="text-base-450 shrink-0" />
+                                    <span className="text-[10px] text-base-400 leading-snug flex-1">Name your file as the song title before uploading for best results.</span>
+                                    <button
+                                        onClick={() => setUploadTipDismissed(true)}
+                                        className="text-base-500 hover:text-base-300 transition-colors shrink-0"
+                                    >
+                                        <X size={10} />
+                                    </button>
                                 </div>
                             )}
 

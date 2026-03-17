@@ -9,8 +9,25 @@ jest.mock('../firebase/firebase', () => ({
 }));
 
 jest.mock('../spotify/appContext', () => ({
-    useSpotifyConnect: jest.fn(),
     useMix: jest.fn(),
+}));
+
+jest.mock('../utils/useSettings', () => ({
+    useSettings: jest.fn(() => ({
+        settings: {
+            animationsEnabled: true,
+            keybinds: {
+                playPause: { key: ' ', ctrl: false, shift: false, alt: false },
+                splitAtPlayhead: { key: 's', ctrl: true, shift: false, alt: false },
+            },
+        },
+    })),
+    matchesKeybind: jest.fn(() => false),
+}));
+
+jest.mock('../components/ProfileModal', () => ({
+    AccountModal: ({ isOpen }) => isOpen ? <div data-testid="account-modal" /> : null,
+    SettingsModal: ({ isOpen }) => isOpen ? <div data-testid="settings-modal" /> : null,
 }));
 
 jest.mock('../audio/AudioEngine', () => ({
@@ -46,26 +63,28 @@ jest.mock('@heroui/react', () => ({
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 const mockSignOut = jest.fn();
-const mockConnectSpotify = jest.fn();
-const mockDisconnectSpotify = jest.fn();
 const mockSetUniversalIsPlaying = jest.fn();
 const mockTriggerMasterStop = jest.fn();
 
 const setupMocks = (overrides = {}) => {
     const { useFirebaseAuth } = require('../firebase/firebase');
-    const { useSpotifyConnect, useMix } = require('../spotify/appContext');
+    const { useMix } = require('../spotify/appContext');
+    const { useSettings } = require('../utils/useSettings');
+
+    useSettings.mockReturnValue({
+        settings: {
+            animationsEnabled: true,
+            keybinds: {
+                playPause: { key: ' ', ctrl: false, shift: false, alt: false },
+                splitAtPlayhead: { key: 's', ctrl: true, shift: false, alt: false },
+            },
+        },
+    });
 
     useFirebaseAuth.mockReturnValue({
         user: { displayName: 'Test User', email: 'test@test.com', photoURL: null },
         signOut: mockSignOut,
         ...((overrides.auth) || {}),
-    });
-
-    useSpotifyConnect.mockReturnValue({
-        isSpotifyConnected: false,
-        connectSpotify: mockConnectSpotify,
-        disconnectSpotify: mockDisconnectSpotify,
-        ...((overrides.spotify) || {}),
     });
 
     useMix.mockReturnValue({
@@ -199,28 +218,16 @@ describe('Header — user profile', () => {
         expect(mockSignOut).toHaveBeenCalledTimes(1);
     });
 
-    it('shows "Connect Spotify" when Spotify is not connected', () => {
+    it('opens AccountModal when "Account info" is clicked', () => {
         render(<Header />);
-        expect(screen.getByText('Connect Spotify')).toBeInTheDocument();
+        fireEvent.click(screen.getByText('Account info'));
+        expect(screen.getByTestId('account-modal')).toBeInTheDocument();
     });
 
-    it('shows "Disconnect Spotify" when Spotify is connected', () => {
-        setupMocks({ spotify: { isSpotifyConnected: true } });
+    it('opens SettingsModal when "Settings" is clicked', () => {
         render(<Header />);
-        expect(screen.getByText('Disconnect Spotify')).toBeInTheDocument();
-    });
-
-    it('calls connectSpotify when "Connect Spotify" is clicked', () => {
-        render(<Header />);
-        fireEvent.click(screen.getByText('Connect Spotify'));
-        expect(mockConnectSpotify).toHaveBeenCalledTimes(1);
-    });
-
-    it('calls disconnectSpotify when "Disconnect Spotify" is clicked', () => {
-        setupMocks({ spotify: { isSpotifyConnected: true } });
-        render(<Header />);
-        fireEvent.click(screen.getByText('Disconnect Spotify'));
-        expect(mockDisconnectSpotify).toHaveBeenCalledTimes(1);
+        fireEvent.click(screen.getByText('Settings'));
+        expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
     });
 });
 

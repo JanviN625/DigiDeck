@@ -489,10 +489,13 @@ export default function AIPanel() {
                             {chats.length === 0 ? (
                                 <p className="text-sm text-base-500 text-center py-8">No chats yet.</p>
                             ) : chats.map(chat => (
-                                <button
+                                <div
                                     key={chat.id}
+                                    role="button"
+                                    tabIndex={0}
                                     onClick={() => switchToChat(chat.id)}
-                                    className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-left transition-colors ${
+                                    onKeyDown={(e) => e.key === 'Enter' && switchToChat(chat.id)}
+                                    className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-left transition-colors cursor-pointer ${
                                         chat.id === activeChatId
                                             ? 'bg-base-700 ring-1 ring-base-600'
                                             : 'bg-base-800 hover:bg-base-700'
@@ -514,7 +517,7 @@ export default function AIPanel() {
                                     >
                                         <Trash2 size={13} />
                                     </button>
-                                </button>
+                                </div>
                             ))}
                         </div>
 

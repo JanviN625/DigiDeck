@@ -2,9 +2,11 @@ import React, { useState, useRef } from 'react';
 import TrackCard from './TrackCard';
 import { useMix } from '../spotify/appContext';
 import { AlertCircle, Plus, X } from 'lucide-react';
+import { useSettings } from '../utils/useSettings';
 
 export default function MainWorkspace() {
     const { tracks, handleAddTrack, handleDuplicateTrack, handleDeleteTrack, handleMoveTrack, trackLimitError, setTrackLimitError } = useMix();
+    const { settings } = useSettings();
     const [draggedIndex, setDraggedIndex] = useState(null);
     const [dropGap, setDropGap] = useState(null);
     const clearGapTimer = useRef(null);
@@ -131,7 +133,12 @@ export default function MainWorkspace() {
 
                 {tracks.length < 5 && (
                     <button
-                        onClick={handleAddTrack}
+                        onClick={() => handleAddTrack({
+                            initialVolume:  settings.defaultVolume,
+                            initialZoom:    settings.defaultZoom,
+                            initialFadeIn:  settings.defaultFadeIn,
+                            initialFadeOut: settings.defaultFadeOut,
+                        })}
                         className="w-full flex items-center justify-center gap-2 py-3 mt-2 rounded-lg border-2 border-dashed border-base-700 text-base-400 hover:border-base-500 hover:text-base-200 transition-colors"
                     >
                         <Plus size={16} />
