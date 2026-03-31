@@ -4,19 +4,26 @@ import { HeroUIProvider } from "@heroui/react";
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
+import { AppProviders } from './spotify/appContext';
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  <React.StrictMode>
-    <HeroUIProvider>
-      <main className="dark text-foreground bg-background">
-        <App />
-      </main>
-    </HeroUIProvider>
-  </React.StrictMode>
-);
+const urlParams = new URLSearchParams(window.location.search);
 
-// If you want to start measuring performance in your app, pass a function
-// to log results (for example: reportWebVitals(console.log))
-// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
-reportWebVitals();
+if (window.opener && urlParams.has('code')) {
+  window.opener.postMessage({ type: 'SPOTIFY_AUTH_CALLBACK', search: window.location.search }, '*');
+  document.body.innerHTML = '<div style="display:flex;justify-content:center;align-items:center;height:100vh;background-color:#0E131F;color:white;font-family:sans-serif;"><h3>Authenticating...</h3></div>';
+} else {
+  const root = ReactDOM.createRoot(document.getElementById('root'));
+  root.render(
+    <React.StrictMode>
+      <HeroUIProvider>
+        <AppProviders>
+          <main className="dark text-foreground bg-background">
+            <App />
+          </main>
+        </AppProviders>
+      </HeroUIProvider>
+    </React.StrictMode>
+  );
+
+  reportWebVitals();
+}

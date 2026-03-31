@@ -1,18 +1,123 @@
-import React, { useState } from 'react';
-import { Pencil } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Pencil, Play, Pause, Square, ZoomIn, Activity, Undo, Redo } from 'lucide-react';
+import { Avatar, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, DropdownSection, Spinner, Slider } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
+import { useFirebaseAuth } from '../firebase/firebase';
+import { useMix } from '../spotify/appContext';
+import AudioEngineService, { audioBufferToWAV } from '../audio/AudioEngine';
+import { AccountModal, SettingsModal } from './ProfileModal';
+import { useSettings, matchesKeybind } from '../utils/useSettings';
 
-export default function Header({ profile, logout }) {
-    const [dropdownOpen, setDropdownOpen] = useState(false);
+export default function Header() {
+    const { user, signOut } = useFirebaseAuth();
+    const { tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, handleClearAllTracks, handleUndo, handleRedo, canUndo, canRedo } = useMix();
+    const { settings } = useSettings();
     const [projectName, setProjectName] = useState('Untitled project');
     const [isEditingProject, setIsEditingProject] = useState(false);
-    const avatarUrl = profile?.images?.[0]?.url;
-    const displayName = profile?.display_name || 'User';
+    const [renderingFor, setRenderingFor] = useState(null); // null | 'preview' | 'export'
+    const previewSourceRef = useRef(null);
+    const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+    const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+    const [saveAlert, setSaveAlert] = useState(false);
+    const [showResetConfirm, setShowResetConfirm] = useState(false);
+
+    useEffect(() => {
+        const handleKeydown = (e) => {
+            const tag = document.activeElement?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
+            if (matchesKeybind(e, settings.keybinds.playPause)) {
+                e.preventDefault();
+                setUniversalIsPlaying(v => !v);
+            }
+            if (matchesKeybind(e, settings.keybinds.saveProject)) {
+                e.preventDefault();
+                handleSave();
+            }
+        };
+        window.addEventListener('keydown', handleKeydown);
+        return () => window.removeEventListener('keydown', handleKeydown);
+    }, [settings.keybinds, setUniversalIsPlaying]);
+
+    const handleSave = () => {
+        setSaveAlert(true);
+        setTimeout(() => setSaveAlert(false), 2000);
+    };
+
+    const handleMixPreview = async () => {
+        if (renderingFor) return;
+        if (previewSourceRef.current) {
+            try { previewSourceRef.current.stop(); } catch {}
+            previewSourceRef.current = null;
+        }
+        setRenderingFor('preview');
+        try {
+            const mixBuffer = await AudioEngineService.renderOffline();
+            if (!mixBuffer) return;
+            const source = AudioEngineService.ctx.createBufferSource();
+            source.buffer = mixBuffer;
+            source.connect(AudioEngineService.masterGain);
+            source.start();
+            source.onended = () => { previewSourceRef.current = null; };
+            previewSourceRef.current = source;
+        } catch (err) {
+            console.error('Mix preview failed:', err);
+        } finally {
+            setRenderingFor(null);
+        }
+    };
+
+    const handleExport = async () => {
+        if (renderingFor) return;
+        setRenderingFor('export');
+        try {
+            const mixBuffer = await AudioEngineService.renderOffline();
+            if (!mixBuffer) return;
+            const wav = audioBufferToWAV(mixBuffer);
+            const blob = new Blob([wav], { type: 'audio/wav' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${projectName || 'mix'}.wav`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('Export failed:', err);
+        } finally {
+            setRenderingFor(null);
+        }
+    };
+
+    // Resolve Profile Data
+    const displayName = user?.displayName || user?.email || 'User';
+
+    // Avatar uses Firebase Auth photoURL permanently
+    const avatarSrc = user?.photoURL || null;
+
+    // Custom initials logic: First character and last character before the '@' symbol
+    const CustomInitials = (nameStr) => {
+        if (!nameStr) return '?';
+        const isEmail = nameStr.includes('@');
+        if (isEmail) {
+            const username = nameStr.split('@')[0];
+            if (username.length === 1) return username[0].toUpperCase();
+            return (username[0] + username[username.length - 1]).toUpperCase();
+        }
+        // Non-email fallback (e.g. Google displayName)
+        const parts = nameStr.trim().split(/\s+/);
+        if (parts.length === 1) {
+            if (parts[0].length === 1) return parts[0].toUpperCase();
+            return (parts[0][0] + parts[0][parts[0].length - 1]).toUpperCase();
+        }
+        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    };
 
     return (
+        <>
         <header className="h-16 bg-base-800 border-b border-base-700 flex items-center justify-between px-6 shrink-0 relative">
-            <div className="flex items-center gap-6">
-                <div className="flex items-center gap-3">
+
+            {/* Left — logo + project name */}
+            <div className="flex items-center gap-4">
+                <div className="flex items-center gap-3 shrink-0">
                     <img src="/icon.png" alt="DigiDeck Logo" className="w-11 h-11 object-contain drop-shadow-md" />
                     <div className="font-extrabold text-sm leading-tight tracking-wider text-base-50">
                         <div>DigiDeck</div>
@@ -20,84 +125,229 @@ export default function Header({ profile, logout }) {
                     </div>
                 </div>
 
-                <div className="h-8 w-px bg-base-700" />
+                <div className="h-6 w-px bg-base-700 shrink-0" />
 
-                <div className="flex items-center gap-2 relative group">
+                <div className="flex items-center gap-1.5 group">
                     <input
                         type="text"
                         value={projectName}
                         onChange={(e) => setProjectName(e.target.value)}
                         disabled={!isEditingProject}
-                        style={{ width: getDynamicInputWidth(projectName, 16) }}
-                        className={`text-base-200 font-medium px-1 py-1 rounded outline-none transition-colors cursor-text ${isEditingProject ? 'bg-base-900' : 'bg-transparent'}`}
+                        style={{ width: getDynamicInputWidth(projectName, 14) }}
+                        className={`text-sm font-medium px-1 py-0.5 rounded outline-none transition-colors cursor-text ${isEditingProject ? 'bg-base-900 text-base-100' : 'bg-transparent text-base-400'}`}
                         onKeyDown={(e) => e.key === 'Enter' && setIsEditingProject(false)}
                     />
                     <button
                         onClick={() => setIsEditingProject(!isEditingProject)}
-                        className={`transition-colors p-1 rounded border ${isEditingProject ? 'bg-base-900 text-base-200 border-base-500' : 'bg-transparent border-transparent text-base-700 hover:text-base-200 hover:border-base-500'}`}
                         title="Rename project"
+                        className={`p-1 rounded transition-colors ${isEditingProject ? 'text-base-300 bg-base-700' : 'text-base-700 opacity-0 group-hover:opacity-100 hover:text-base-300'}`}
                     >
-                        <Pencil size={16} />
+                        <Pencil size={13} />
                     </button>
                 </div>
             </div>
 
-            <div
-                className="flex gap-4 relative h-full items-center justify-end"
-                onMouseLeave={() => setDropdownOpen(false)}
-            >
-                {/* Secondary Navigation Actions */}
-                <nav className="flex items-center gap-1.5 mr-2">
-                    <button className="text-sm font-semibold text-base-300 hover:text-base-50 hover:bg-base-700 px-3 py-1.5 rounded transition-colors tracking-wide">Save</button>
-                    <button className="text-sm font-semibold text-base-300 hover:text-base-50 hover:bg-base-700 px-3 py-1.5 rounded transition-colors tracking-wide">Load</button>
-                    <button className="text-sm font-semibold text-base-300 hover:text-base-50 hover:bg-base-700 px-3 py-1.5 rounded transition-colors tracking-wide">Export</button>
-                    <div className="w-px h-5 bg-base-700 mx-2"></div>
-                    <button className="text-sm font-bold text-base-50 bg-base-600 hover:bg-base-500 px-4 py-1.5 rounded-full transition-colors tracking-wide border border-base-500 shadow-sm ml-1">Preview Full Mix</button>
-                </nav>
-
-                <div className="relative">
+            {/* Center — transport */}
+            {tracks.length > 0 && (
+                <div className="flex-1 flex justify-center min-w-0 pointer-events-none mr-4">
+                    <div className="flex items-center gap-1 bg-base-900/60 border border-base-700 rounded-lg px-2 py-1.5 pointer-events-auto">
                     <button
-                        onClick={() => setDropdownOpen(!dropdownOpen)}
-                        className={`w-10 h-10 rounded-full bg-base-700 flex items-center justify-center overflow-hidden border-2 transition-colors focus:outline-none relative z-10 ${dropdownOpen ? 'border-base-500' : 'border-transparent hover:border-base-500'}`}
-                        title="Account profile"
+                        onClick={() => setUniversalIsPlaying(v => !v)}
+                        className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${
+                            universalIsPlaying
+                                ? 'text-base-450 bg-base-450/15'
+                                : 'text-base-200 hover:text-base-50 hover:bg-base-700/60'
+                        }`}
                     >
-                        {avatarUrl ? (
-                            <img src={avatarUrl} alt={displayName} className="w-full h-full object-cover" />
-                        ) : (
-                            <span className="font-bold text-lg text-base-50">{displayName[0]?.toUpperCase() || '?'}</span>
-                        )}
+                        {universalIsPlaying ? <Pause size={14} /> : <Play size={14} className="ml-px" />}
                     </button>
+                    <button
+                        onClick={triggerMasterStop}
+                        className="w-7 h-7 rounded-md flex items-center justify-center text-base-200 hover:text-base-50 hover:bg-base-700/60 transition-colors"
+                    >
+                        <Square size={11} fill="currentColor" />
+                    </button>
+                    <div className="w-px h-4 bg-base-700 mx-1" />
+                    <div className={`w-1.5 h-1.5 rounded-full transition-colors ${
+                        universalIsPlaying ? 'bg-base-450 animate-pulse' : 'bg-base-500'
+                    }`} />
+                    <span className={`text-[10px] font-bold tracking-widest uppercase mr-3 transition-colors ${
+                        universalIsPlaying ? 'text-base-450' : 'text-base-500'
+                    }`}>
+                        {universalIsPlaying ? 'Live' : 'Idle'}
+                    </span>
+                    <div className="w-px h-4 bg-base-700 mx-1" />
+                    <div className="flex items-center gap-1.5 px-2 group">
+                        <Activity size={12} className="text-base-500 group-hover:text-base-300 transition-colors" />
+                        <input
+                            type="number"
+                            min="20"
+                            max="300"
+                            value={masterBpm}
+                            onChange={(e) => setMasterBpm(Number(e.target.value))}
+                            className="bg-transparent border border-transparent hover:border-base-700 focus:border-base-500 text-xs font-mono text-base-100 rounded px-1 w-12 outline-none text-center transition-colors appearance-none scrollbar-hide"
+                            title="Master BPM"
+                            style={{ MozAppearance: 'textfield' }} // hide arrows in firefox
+                        />
+                        <style>{`
+                            input[type="number"]::-webkit-inner-spin-button,
+                            input[type="number"]::-webkit-outer-spin-button {
+                                -webkit-appearance: none;
+                                margin: 0;
+                            }
+                        `}</style>
+                    </div>
+                    <div className="w-px h-4 bg-base-700 mx-1" />
+                    <div className="flex items-center gap-2 group w-32 px-1">
+                        <ZoomIn size={12} className="text-base-500 group-hover:text-base-300 transition-colors shrink-0" />
+                        <Slider
+                            size="sm"
+                            step={5}
+                            maxValue={100}
+                            minValue={0}
+                            value={globalZoom}
+                            onChange={setGlobalZoom}
+                            className="w-full"
+                            classNames={{
+                                track: "bg-base-700/50 border-y border-base-900",
+                                filler: "bg-base-500 group-hover:bg-base-400 transition-colors",
+                                thumb: "w-4 h-4 bg-base-300 hover:bg-base-200 transition-colors shadow-md rounded-full cursor-grab active:cursor-grabbing"
+                            }}
+                            renderThumb={() => <div />}
+                        />
+                    </div>
+                    </div>
+                </div>
+            )}
 
-                    {dropdownOpen && (
-                        /* Invisible padding area expanding to the left and up to catch mouse travel */
-                        <div className="absolute top-0 right-0 pt-10 -ml-16 w-48 z-50">
-                            <div className="w-full bg-base-800 border border-base-700 rounded-lg shadow-xl overflow-hidden text-base-200">
-                                <div className="px-4 py-3 border-b border-base-700 bg-base-900/50">
-                                    <p className="font-semibold truncate" title={displayName}>{displayName}</p>
-                                </div>
-                                <div className="py-1">
-                                    <button className="w-full text-left px-4 py-2 hover:bg-base-700 transition-colors text-sm">
-                                        Account info
-                                    </button>
-                                    <button className="w-full text-left px-4 py-2 hover:bg-base-700 transition-colors text-sm">
-                                        Settings
-                                    </button>
-                                    <div className="border-t border-base-700 my-1"></div>
-                                    <button
-                                        onClick={() => {
-                                            setDropdownOpen(false);
-                                            logout();
-                                        }}
-                                        className="w-full text-left px-4 py-2 hover:bg-base-700 text-base-500 font-medium transition-colors outline-none text-sm"
-                                    >
-                                        Logout
-                                    </button>
-                                </div>
-                            </div>
+            {/* Right — actions + avatar */}
+            <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1 mr-4 border-r border-base-700 pr-4">
+                    <button
+                        onClick={handleUndo}
+                        disabled={!canUndo}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${canUndo ? 'text-base-100 bg-base-800 hover:bg-base-700 hover:text-white border border-base-700' : 'text-base-600 bg-transparent border border-transparent cursor-not-allowed'}`}
+                        title="Undo"
+                    >
+                        <Undo size={14} /> Undo
+                    </button>
+                    <button
+                        onClick={handleRedo}
+                        disabled={!canRedo}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${canRedo ? 'text-base-100 bg-base-800 hover:bg-base-700 hover:text-white border border-base-700' : 'text-base-600 bg-transparent border border-transparent cursor-not-allowed'}`}
+                        title="Redo"
+                    >
+                        <Redo size={14} /> Redo
+                    </button>
+                </div>
+                <div className="flex items-center gap-0.5">
+                    <button onClick={handleSave} className="text-sm font-medium px-3 py-1.5 rounded-md transition-colors w-16 text-center select-none group">
+                        <span className={`block transition-opacity duration-200 ${saveAlert ? 'opacity-0' : 'opacity-100 text-base-400 group-hover:text-base-100 group-hover:bg-base-700/60'}`}>Save</span>
+                        <span className={`block text-emerald-400 absolute top-1/2 -translate-y-1/2 transition-opacity duration-200 ${saveAlert ? 'opacity-100' : 'opacity-0'}`}>Saved!</span>
+                    </button>
+                    <button className="text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors">Load</button>
+                    <button
+                        onClick={handleExport}
+                        disabled={!!renderingFor}
+                        className="text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                        {renderingFor === 'export' ? 'Exporting…' : 'Export'}
+                    </button>
+                    {showResetConfirm ? (
+                        <div className="flex items-center gap-1.5 animate-in fade-in duration-150">
+                            <span className="text-xs text-base-400">Reset workspace?</span>
+                            <button
+                                onClick={() => { handleClearAllTracks(); setShowResetConfirm(false); }}
+                                className="text-xs font-semibold text-red-400 hover:text-red-300 px-2 py-0.5 rounded bg-red-900/20 hover:bg-red-900/40 transition-colors"
+                            >
+                                Reset
+                            </button>
+                            <button
+                                onClick={() => setShowResetConfirm(false)}
+                                className="text-xs text-base-500 hover:text-base-300 px-2 py-0.5 rounded transition-colors"
+                            >
+                                Cancel
+                            </button>
                         </div>
+                    ) : (
+                        <button
+                            onClick={() => setShowResetConfirm(true)}
+                            className="text-sm text-red-500 hover:text-red-300 hover:bg-red-900/30 px-3 py-1.5 rounded-md transition-colors"
+                            title="Remove all tracks and start fresh"
+                        >
+                            Reset
+                        </button>
                     )}
                 </div>
+
+                <div className="w-px h-5 bg-base-700" />
+
+                <button
+                    onClick={handleMixPreview}
+                    disabled={!!renderingFor}
+                    className="text-sm font-semibold text-base-50 bg-base-500 hover:bg-base-400 border border-base-400/50 px-4 py-1.5 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                    {renderingFor === 'preview' && (
+                        <Spinner size="sm" classNames={{ circle1: 'border-b-base-300', circle2: 'border-b-base-300' }} />
+                    )}
+                    Mix Preview
+                </button>
+
+                <Dropdown
+                    placement="bottom-end"
+                    classNames={{
+                        content: "bg-base-800 border border-base-700 rounded-lg shadow-xl text-base-200 min-w-[200px]"
+                    }}
+                >
+                    <DropdownTrigger>
+                        {avatarSrc ? (
+                            <button className="bg-base-700 border-2 border-base-500 cursor-pointer rounded-full overflow-hidden w-10 h-10 flex items-center justify-center shrink-0">
+                                <img src={avatarSrc} alt={displayName} className="w-full h-full object-cover" />
+                            </button>
+                        ) : (
+                            <Avatar
+                                as="button"
+                                name={displayName}
+                                getInitials={CustomInitials}
+                                showFallback
+                                classNames={{
+                                    base: "bg-base-700 border-2 border-base-500 cursor-pointer",
+                                    name: "text-base-50 font-bold"
+                                }}
+                            />
+                        )}
+                    </DropdownTrigger>
+
+                    <DropdownMenu aria-label="Profile Actions" variant="flat">
+                        <DropdownItem key="profile" textValue="Profile Info" className="h-14 gap-2 opacity-100 hover:bg-transparent cursor-default">
+                            <p className="font-semibold truncate text-base-50">{displayName}</p>
+                            <p className="text-xs text-base-400 truncate">{user?.email}</p>
+                        </DropdownItem>
+
+                        <DropdownItem key="account" textValue="Account Info" onPress={() => setIsAccountModalOpen(true)} className="hover:bg-base-700 hover:text-base-50 text-sm py-2">
+                            Account info
+                        </DropdownItem>
+
+                        <DropdownItem key="settings" textValue="Settings" onPress={() => setIsSettingsModalOpen(true)} className="hover:bg-base-700 hover:text-base-50 text-sm py-2">
+                            Settings
+                        </DropdownItem>
+
+                        <DropdownSection showDivider>
+                            <DropdownItem
+                                key="logout"
+                                textValue="Logout"
+                                className="text-base-400 hover:text-base-400 hover:bg-base-700 font-medium text-sm py-2"
+                                onPress={signOut}
+                            >
+                                Logout
+                            </DropdownItem>
+                        </DropdownSection>
+                    </DropdownMenu>
+                </Dropdown>
             </div>
         </header>
+        <AccountModal  isOpen={isAccountModalOpen}  onClose={() => setIsAccountModalOpen(false)} />
+        <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
+        </>
     );
 }
