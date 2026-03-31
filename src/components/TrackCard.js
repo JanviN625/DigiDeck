@@ -3,7 +3,7 @@ import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, Eye
 import { Slider } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
 import { useAudioEngine } from '../audio/useAudioEngine';
-import AudioEngineService from '../audio/AudioEngine';
+import AudioEngineService, { audioBufferToWAV } from '../audio/AudioEngine';
 import WaveSurfer from 'wavesurfer.js';
 import { analyzeAudioBuffer } from '../audio/essentiaAnalyzer';
 import { useMix } from '../spotify/appContext';
@@ -117,6 +117,8 @@ const EFFECT_CONFIGS = {
 
 const makeDefaultSegment = (id, startPct = 0, endPct = 1) => ({
     id, startPct, endPct,
+    isDeleted: false,
+    isMuted: false,
     fadeIn: 0, fadeOut: 0, pitch: 0, speed: 1.0,
     eqLow: 0, eqMid: 0, eqHigh: 0,
     eqKills: { low: false, mid: false, high: false },
@@ -139,6 +141,7 @@ export default function TrackCard({
     initialFadeIn = "0.0s",
     initialFadeOut = "0.0s",
     initialZoom = 0,
+    offsetSec = 0,
     initialSegments = null,
     artistName = "[Artist Name]",
     albumArt = null,
@@ -146,10 +149,17 @@ export default function TrackCard({
     trackKey = "[key]",
     spotifyId = null,
     audioUrl = null,
+    audioBlob = null,
     beatPositions = null,
     isMissing = false,
 }) {
     const { settings } = useSettings();
+    const { tracks, handleUpdateTrack, handleAddTrack, handleClearAllTracks, handleUpdateTrackDuration, universalIsPlaying, masterStopSignal, globalZoom, masterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleOverwriteTracks } = useMix();
+    const {
+        play, pause, seek, setVolume: setEngVolume, setPitch: setEngPitch, setSpeed: setEngSpeed,
+        setEQ, addEffect, removeEffect, setEffectParam, applyFadeIn, applyFadeOut
+    } = useAudioEngine(trackId);
+
     const [isExpanded, setIsExpanded] = useState(initiallyExpanded);
     const [trackName, setTrackName] = useState(title);
     const [isEditing, setIsEditing] = useState(false);
@@ -159,6 +169,7 @@ export default function TrackCard({
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
+    const [isSegmentMuted, setIsSegmentMuted] = useState(false);
     const [isVisible, setIsVisible] = useState(true);
     const [volume, setVolume] = useState(initialVolume);
     const [pitch, setPitch] = useState(initialPitch);
@@ -169,14 +180,14 @@ export default function TrackCard({
     const [audioDuration, setAudioDuration] = useState(0);
     const [displayTimeSec, setDisplayTimeSec] = useState(0);
     const [containerWidth, setContainerWidth] = useState(0);
-    const [zoom, setZoom] = useState(initialZoom);
     // Derived synchronously — no state lag when zoom changes.
     // zoom > 0: WaveSurfer pxPerSec = zoom * 2, so total canvas width = zoom * 2 * duration.
     // zoom = 0: WaveSurfer auto-fits to container; containerWidth is measured via rAF.
-    const waveformPixelWidth = zoom > 0 && audioDuration ? zoom * 2 * audioDuration : containerWidth;
+    const waveformPixelWidth = globalZoom > 0 && audioDuration ? globalZoom * 2 * audioDuration : containerWidth;
     const [effects, setEffects] = useState([]);
     const [showAddEffectMenu, setShowAddEffectMenu] = useState(false);
     const [isDraggable, setIsDraggable] = useState(false);
+    const [draggedSegmentState, setDraggedSegmentState] = useState(null);
     const [segments, setSegments] = useState(() => initialSegments ?? [makeDefaultSegment(0)]);
     const [activeSegmentId, setActiveSegmentId] = useState(() => (initialSegments ?? [makeDefaultSegment(0)])[0]?.id ?? 0);
     const [g6Dismissed, setG6Dismissed] = useState(false);
@@ -186,6 +197,7 @@ export default function TrackCard({
     const [eqHigh, setEqHigh] = useState(0);
     const [eqKills, setEqKills] = useState({ low: false, mid: false, high: false });
 
+    const laneRef = useRef(null);
     const waveformRef = useRef(null);
     const wavesurferRef = useRef(null);
     const waveformReadyRef = useRef(false);
@@ -196,8 +208,7 @@ export default function TrackCard({
     const beatPositionsRef = useRef(beatPositions);
     const adjustedBeatPositionsRef = useRef(null);
     const overlayContainerRef = useRef(null);
-    const wsScrollRef = useRef(null);
-    const wsScrollCleanupRef = useRef(null);
+    const scrollContainerRef = useRef(null);
     const isHoveredRef = useRef(false);
     const lastTimestampUpdateRef = useRef(0);
     const activeSegmentIdRef = useRef((initialSegments ?? [makeDefaultSegment(0)])[0]?.id ?? 0);
@@ -205,16 +216,17 @@ export default function TrackCard({
     const playingSegmentIdRef = useRef(null);
     const effectsRef = useRef([]);
     const activateSegmentRef = useRef(null);
-
-    const {
-        play, pause, seek, setVolume: setEngVolume, setPitch: setEngPitch, setSpeed: setEngSpeed,
-        setEQ, addEffect, removeEffect, setEffectParam, applyFadeIn, applyFadeOut
-    } = useAudioEngine(trackId);
-
-    const { tracks, handleUpdateTrack, universalIsPlaying, masterStopSignal } = useMix();
+    const playWaitTimerRef = useRef(null);
 
     // Re-show the missing warning if the file is deleted again after being restored
     useEffect(() => { if (isMissing) setMissingDismissed(false); }, [isMissing]);
+
+    // Bind Undo/Redo state rewinds from Context into local visual layout
+    useEffect(() => {
+        if (initialSegments) {
+            setSegments(initialSegments);
+        }
+    }, [initialSegments]);
 
     // Derived — always accurate, immune to effect timing issues
     const isDuplicateName = isEditing && tracks.some(t => t.id !== trackId && t.title.trim() === trackName.trim());
@@ -271,9 +283,19 @@ export default function TrackCard({
 
         async function loadAndInit() {
             try {
-                // Single network fetch
-                const res = await fetch(audioUrl);
-                const arrayBuffer = await res.arrayBuffer();
+                let arrayBuffer;
+
+                if (audioBlob) {
+                    // Bypass emulator network layer fetch for Blobs
+                    arrayBuffer = await audioBlob.arrayBuffer();
+                    blobUrl = URL.createObjectURL(audioBlob);
+                } else {
+                    const res = await fetch(audioUrl);
+                    arrayBuffer = await res.arrayBuffer();
+                    const blob = new Blob([arrayBuffer]);
+                    blobUrl = URL.createObjectURL(blob);
+                }
+                
                 if (isCancelled) return;
 
                 // Create Blob URL for WaveSurfer BEFORE decodeAudioData detaches the buffer
@@ -303,7 +325,7 @@ export default function TrackCard({
                     const updates = { beatPositions: Array.from(results.beatPositions || []) };
                     if (bpm === '[BPM]') updates.bpm = results.bpm;
                     if (trackKey === '[key]') updates.trackKey = `${results.key} ${results.scale}`;
-                    handleUpdateTrack(trackId, updates);
+                    handleUpdateTrack(trackId, updates, true); // true = skipHistory to prevent undo stack overwrite on load
                 }).catch(err => {
                     console.warn("Essentia analysis failed:", err);
                     setIsAnalysing(false);
@@ -331,27 +353,13 @@ export default function TrackCard({
                     waveformReadyRef.current = true;
                     durationRef.current = ws.getDuration();
                     setAudioDuration(ws.getDuration());
-                    if (zoom > 0) ws.zoom(zoom * 2);
-
-                    // Attach a native scroll listener to WaveSurfer's internal [part="scroll"]
-                    // container. This fires for both user-initiated panning AND programmatic
-                    // auto-scroll from seekTo(), keeping overlays locked to the waveform canvas.
-                    const scrollEl = waveformRef.current?.querySelector('[part="scroll"]');
-                    if (scrollEl) {
-                        wsScrollRef.current = scrollEl;
-                        const onWsScroll = () => {
-                            if (overlayContainerRef.current) {
-                                overlayContainerRef.current.style.transform =
-                                    `translateX(-${scrollEl.scrollLeft}px)`;
-                            }
-                        };
-                        scrollEl.addEventListener('scroll', onWsScroll, { passive: true });
-                        wsScrollCleanupRef.current = () =>
-                            scrollEl.removeEventListener('scroll', onWsScroll);
-                    }
+                    if (globalZoom > 0) ws.zoom(globalZoom * 2);
                 });
 
                 ws.on('interaction', (newTime) => {
+                    const absTime = newTime + offsetSec;
+                    handleSeekMaster(absTime);
+
                     if (durationRef.current > 0) {
                         currentTimePctRef.current = newTime / durationRef.current;
                         // Detect which segment the user clicked and activate it
@@ -378,9 +386,6 @@ export default function TrackCard({
         return () => {
             isCancelled = true;
             waveformReadyRef.current = false;
-            wsScrollCleanupRef.current?.();
-            wsScrollCleanupRef.current = null;
-            wsScrollRef.current = null;
             if (blobUrl) URL.revokeObjectURL(blobUrl);
             if (ws) ws.destroy();
             wavesurferRef.current = null;
@@ -390,8 +395,8 @@ export default function TrackCard({
 
     // Handle Engine Volume
     useEffect(() => {
-        setEngVolume(isMuted || !isVisible ? 0 : volume / 100);
-    }, [volume, isMuted, isVisible, setEngVolume]);
+        setEngVolume(isMuted || !isVisible || isSegmentMuted ? 0 : volume / 100);
+    }, [volume, isMuted, isVisible, isSegmentMuted, setEngVolume]);
 
     // Handle Engine Pitch
     useEffect(() => {
@@ -403,12 +408,50 @@ export default function TrackCard({
         setEngSpeed(speed);
     }, [speed, setEngSpeed]);
 
-    // Universal play/pause signal — audioUrl intentionally omitted from deps so loading
-    // a new track while master is paused does not auto-start it.
+    // Universal play/pause signal — orchestrates perfectly synced timeline playback
     useEffect(() => {
         if (!audioUrl) return;
-        setIsPlaying(universalIsPlaying);
-    }, [universalIsPlaying]); // eslint-disable-line react-hooks/exhaustive-deps
+        clearTimeout(playWaitTimerRef.current);
+
+        if (universalIsPlaying) {
+            const timeUntilStart = offsetSec - masterTimeRef.current;
+            if (timeUntilStart > 0) {
+                 playWaitTimerRef.current = setTimeout(() => {
+                      if (!waveformReadyRef.current) return;
+                      // When the timeout fires, the master clock has reached our clip!
+                      const expectedLocalTime = masterTimeRef.current - offsetSec;
+                      const currentLocalTime = wavesurferRef.current?.getCurrentTime() || 0;
+                      if (Math.abs(currentLocalTime - expectedLocalTime) > 0.1) {
+                           seek(0);
+                           wavesurferRef.current?.seekTo(0);
+                           currentTimePctRef.current = 0;
+                           setDisplayTimeSec(0);
+                      }
+                      setIsPlaying(true);
+                 }, timeUntilStart * 1000);
+            } else {
+                 const expectedLocalTime = masterTimeRef.current - offsetSec;
+                 
+                 // if track is shorter than expected local time, it is fully in the past, don't play it
+                 if (durationRef.current > 0 && expectedLocalTime >= durationRef.current) {
+                      setIsPlaying(false);
+                      return;
+                 }
+
+                 const currentLocalTime = wavesurferRef.current?.getCurrentTime() || 0;
+                 if (Math.abs(currentLocalTime - expectedLocalTime) > 0.1) {
+                      seek(expectedLocalTime);
+                      const norm = durationRef.current ? expectedLocalTime / durationRef.current : 0;
+                      wavesurferRef.current?.seekTo(Math.min(1, Math.max(0, norm)));
+                      currentTimePctRef.current = norm;
+                      setDisplayTimeSec(expectedLocalTime);
+                 }
+                 setIsPlaying(true);
+            }
+        } else {
+            setIsPlaying(false);
+        }
+    }, [universalIsPlaying, offsetSec]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Universal stop signal — pause + seek every track back to 0:00
     useEffect(() => {
@@ -436,39 +479,39 @@ export default function TrackCard({
     // overlay container so all overlays remain pinned to their correct time positions.
     useEffect(() => {
         if (!waveformReadyRef.current || !wavesurferRef.current) return;
-        wavesurferRef.current.zoom(zoom * 2);
+        wavesurferRef.current.zoom(globalZoom * 2);
         requestAnimationFrame(() => {
-            if (!overlayContainerRef.current) return;
-            if (zoom > 0 && wsScrollRef.current && waveformRef.current) {
+            if (!scrollContainerRef.current) return;
+            if (globalZoom > 0 && waveformRef.current) {
                 // Center the view on the current playhead position.
                 // totalWidth = pxPerSec * duration (same formula as waveformPixelWidth).
-                const totalWidth  = zoom * 2 * durationRef.current;
-                const containerW  = waveformRef.current.clientWidth;
+                const totalWidth  = globalZoom * 2 * durationRef.current;
+                const containerW  = scrollContainerRef.current.clientWidth;
                 const playheadPx  = currentTimePctRef.current * totalWidth;
                 const scrollTo    = Math.max(0, Math.min(playheadPx - containerW / 2, totalWidth - containerW));
-                wsScrollRef.current.scrollLeft = scrollTo;
-                // scrollLeft assignment fires the 'scroll' event synchronously in most
-                // browsers, but set transform explicitly here as a guaranteed fallback.
-                overlayContainerRef.current.style.transform = `translateX(-${scrollTo}px)`;
+                scrollContainerRef.current.scrollLeft = scrollTo;
             } else {
                 // zoom = 0: full track fits in container, no scroll needed.
-                if (wsScrollRef.current) wsScrollRef.current.scrollLeft = 0;
-                overlayContainerRef.current.style.transform = 'translateX(0)';
+                scrollContainerRef.current.scrollLeft = 0;
             }
         });
-    }, [zoom]);
+    }, [globalZoom]);
 
-    // Measure container width for zoom = 0 (auto-fit mode).
-    // zoom > 0 is computed synchronously as a derived value — no effect needed.
+    // Measure container width dynamically using ResizeObserver.
+    // This handles zoom = 0 (auto-fit mode) and any flex shrinking if masterDuration extends.
     useEffect(() => {
-        if (zoom > 0 || !audioDuration) return;
-        const id = requestAnimationFrame(() => {
-            if (waveformRef.current) setContainerWidth(waveformRef.current.clientWidth);
+        if (!waveformRef.current || globalZoom > 0) return;
+        
+        const node = waveformRef.current;
+        const observer = new ResizeObserver(entries => {
+            for (let entry of entries) {
+                setContainerWidth(entry.contentRect.width);
+            }
         });
-        return () => cancelAnimationFrame(id);
-    }, [zoom, audioDuration]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    // ─── Segment settings sync ───────────────────────────────────────────────────
+        
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [globalZoom]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Write a partial update to the currently active segment's stored config.
     // Uses activeSegmentIdRef (always current) to avoid stale closure in concurrent renders.
@@ -483,12 +526,59 @@ export default function TrackCard({
     // activateSegment uses the plain setters (no write-back needed when loading from a segment).
     const setFadeInWithSync    = useCallback((v) => { setFadeIn(v);  syncActiveSegmentSettings({ fadeIn: v }); },  [syncActiveSegmentSettings]);
     const setFadeOutWithSync   = useCallback((v) => { setFadeOut(v); syncActiveSegmentSettings({ fadeOut: v }); }, [syncActiveSegmentSettings]);
-    const setPitchWithSync     = useCallback((v) => { setPitch(v);   syncActiveSegmentSettings({ pitch: v }); },   [syncActiveSegmentSettings]);
-    const setSpeedWithSync     = useCallback((v) => { setSpeed(v);   syncActiveSegmentSettings({ speed: v }); },   [syncActiveSegmentSettings]);
+
+    // Key names for pitch transposition (chromatic)
+    const CHROMATIC_KEYS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+    const setPitchWithSync = useCallback((v) => {
+        setPitch(v);
+        syncActiveSegmentSettings({ pitch: v });
+        // Update displayed key by transposing based on semitones
+        if (trackKey && trackKey !== '[key]') {
+            const parts = trackKey.trim().split(' ');
+            const rootNote = parts[0];
+            const mode = parts.slice(1).join(' ');
+            const rootIdx = CHROMATIC_KEYS.indexOf(rootNote);
+            if (rootIdx !== -1) {
+                const semis = Math.round(v);
+                const newRoot = CHROMATIC_KEYS[((rootIdx + semis) % 12 + 12) % 12];
+                const newKey = mode ? `${newRoot} ${mode}` : newRoot;
+                handleUpdateTrack(trackId, { trackKey: newKey }, true);
+            }
+        }
+    }, [syncActiveSegmentSettings, trackKey, trackId, handleUpdateTrack]);
+
+    const setSpeedWithSync = useCallback((v) => {
+        setSpeed(v);
+        syncActiveSegmentSettings({ speed: v });
+        // Update displayed BPM proportionally to speed
+        if (bpm && bpm !== '[BPM]' && !isNaN(parseFloat(bpm))) {
+            const newBpm = Math.round(parseFloat(bpm) * v);
+            handleUpdateTrack(trackId, { bpm: String(newBpm) }, true);
+        }
+    }, [syncActiveSegmentSettings, bpm, trackId, handleUpdateTrack]);
     const setEqLowWithSync     = useCallback((v) => { setEqLow(v);   syncActiveSegmentSettings({ eqLow: v }); },   [syncActiveSegmentSettings]);
     const setEqMidWithSync     = useCallback((v) => { setEqMid(v);   syncActiveSegmentSettings({ eqMid: v }); },   [syncActiveSegmentSettings]);
     const setEqHighWithSync    = useCallback((v) => { setEqHigh(v);  syncActiveSegmentSettings({ eqHigh: v }); },  [syncActiveSegmentSettings]);
     const setEqKillsWithSync   = useCallback((v) => { setEqKills(v); syncActiveSegmentSettings({ eqKills: v }); }, [syncActiveSegmentSettings]);
+
+    const handleToggleDelete = useCallback((e) => {
+        e.stopPropagation();
+        const seg = segmentsRef.current?.find(s => s.id === activeSegmentIdRef.current);
+        if (!seg) return;
+        const next = !seg.isDeleted;
+        syncActiveSegmentSettings({ isDeleted: next });
+        setIsSegmentMuted(next || seg.isMuted);
+    }, [syncActiveSegmentSettings]);
+
+    const handleToggleMute = useCallback((e) => {
+        e.stopPropagation();
+        const seg = segmentsRef.current?.find(s => s.id === activeSegmentIdRef.current);
+        if (!seg) return;
+        const next = !seg.isMuted;
+        syncActiveSegmentSettings({ isMuted: next });
+        setIsSegmentMuted(seg.isDeleted || next);
+    }, [syncActiveSegmentSettings]);
 
     // Activate a segment: update ref immediately (so concurrent effects target the new segment),
     // apply all its audio settings to the engine, reconcile the effects chain, and sync UI state.
@@ -533,6 +623,7 @@ export default function TrackCard({
         setEqHigh(seg.eqHigh);
         setEffects(newEffects);
         setEqKills(kills);
+        setIsSegmentMuted(seg.isDeleted || false);
     }, [trackId]);
 
     // Keep activateSegmentRef current for stable access inside WaveSurfer callbacks
@@ -574,6 +665,20 @@ export default function TrackCard({
         ));
     }, [removeEffect]);
 
+    const handleSync = useCallback((e) => {
+        e.stopPropagation();
+        if (bpm !== '[BPM]' && !isNaN(parseFloat(bpm))) {
+            const parsedBpm = parseFloat(bpm);
+            if (parsedBpm > 0) {
+                const targetSpeed = masterBpm / parsedBpm;
+                const clampedSpeed = Math.min(4.0, Math.max(0.25, targetSpeed));
+                setSpeedWithSync(clampedSpeed);
+                // After sync, display the master BPM since the track is now matching it
+                handleUpdateTrack(trackId, { bpm: String(masterBpm) });
+            }
+        }
+    }, [bpm, masterBpm, setSpeedWithSync, handleUpdateTrack, trackId]);
+
     // Split track at playhead position — inserts a cut point into the segments array.
     // Cut snaps to the nearest beat/half-beat when Essentia data is available.
     const handleSplit = useCallback(() => {
@@ -613,9 +718,172 @@ export default function TrackCard({
                 { ...seg, startPct: seg.startPct, endPct: pct, fadeOut: 0 },
                 { ...seg, id: Date.now(), startPct: pct, endPct: seg.endPct, fadeIn: 0 }
             );
+            handleUpdateTrack(trackId, { initialSegments: next });
             return next;
         });
     }, [audioUrl]);
+
+    const handleOffsetDragStart = useCallback((e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (!masterDuration) return;
+        
+        const startX = e.clientX;
+        const currentLaneWidth = laneRef.current?.clientWidth || 800;
+        const initialOffset = offsetSec;
+        
+        // Capture static snapshots to prevent runaway math during dragging loops
+        const initialMasterDuration = masterDuration || durationRef.current || 1;
+        const initialTracksSnapshot = tracks;
+        const beatSec = 60 / (masterBpm || 120);
+        
+        const computeShiftAndOverwrite = (clientX, skipHistory) => {
+            const dx = clientX - startX;
+            const deltaSec = (dx / currentLaneWidth) * initialMasterDuration;
+            let rawOffset = initialOffset + deltaSec;
+            
+            // Snap offset to the nearest beat
+            rawOffset = Math.round(rawOffset / beatSec) * beatSec;
+            
+            const shiftAmount = rawOffset < 0 ? Math.abs(rawOffset) : 0;
+            
+            const newlyMapped = initialTracksSnapshot.map(t => {
+                if (t.id === trackId) {
+                    return { ...t, offsetSec: Math.max(0, rawOffset) };
+                }
+                return { ...t, offsetSec: (t.offsetSec || 0) + shiftAmount };
+            });
+            
+            handleOverwriteTracks(newlyMapped, skipHistory);
+        };
+        
+        const handleMouseMove = (moveEvent) => {
+            computeShiftAndOverwrite(moveEvent.clientX, true); // True = skip history while actively dragging
+        };
+        
+        const handleMouseUp = (upEvent) => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+            // Final commit (skipHistory = false)
+            computeShiftAndOverwrite(upEvent.clientX, false);
+        };
+        
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+    }, [masterDuration, offsetSec, trackId, tracks, handleOverwriteTracks]);
+
+    const handleSegmentDragStart = useCallback((e, seg) => {
+        e.stopPropagation();
+        e.preventDefault();
+        
+        const startX = e.clientX;
+        const currentLaneWidth = laneRef.current?.clientWidth || 800;
+        
+        const handleMouseMove = (moveEvent) => {
+            const dx = moveEvent.clientX - startX;
+            setDraggedSegmentState({ id: seg.id, dx });
+        };
+        
+        const handleMouseUp = async (upEvent) => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+            
+            const dx = upEvent.clientX - startX;
+            setDraggedSegmentState(null);
+            
+            const initialMasterDuration = masterDuration || durationRef.current || 1;
+            const beatSec = 60 / (masterBpm || 120);
+            
+            let deltaSec = (dx / currentLaneWidth) * initialMasterDuration;
+            deltaSec = Math.round(deltaSec / beatSec) * beatSec;
+            
+            if (deltaSec <= 0.05) return; // Prevent extracting non-snapped micro amounts or dragging left
+            
+            // Perform In-Place Gap Injection
+            setIsAnalysing(true); // show generic loading state
+            
+            const trackObj = AudioEngineService.tracks.get(trackId);
+            if (!trackObj || !trackObj.audioBuffer) {
+                setIsAnalysing(false);
+                return;
+            }
+
+            const oldBuf = trackObj.audioBuffer;
+            const sr = oldBuf.sampleRate;
+            const channels = oldBuf.numberOfChannels;
+            
+            const gapSec = deltaSec;
+            const gapFrames = Math.floor(gapSec * sr);
+            const sliceFrame = Math.floor(seg.startPct * oldBuf.length);
+            
+            const newLen = oldBuf.length + gapFrames;
+            const newBuf = AudioEngineService.ctx.createBuffer(channels, newLen, sr);
+            for (let ch = 0; ch < channels; ch++) {
+                const newData = newBuf.getChannelData(ch);
+                const oldData = oldBuf.getChannelData(ch);
+                // Copy Part A (Unmodified)
+                newData.set(oldData.subarray(0, sliceFrame), 0);
+                // gap is implicitly 0s
+                // Copy Part B (Shifted right by gapFrames)
+                newData.set(oldData.subarray(sliceFrame), sliceFrame + gapFrames);
+            }
+
+            const wavObj = audioBufferToWAV(newBuf);
+            const blob = new Blob([wavObj], { type: 'audio/wav' });
+
+            const oldDuration = oldBuf.duration;
+            const newDuration = newLen / sr;
+            
+            // Recalculate segment bounds safely
+            const updatedSegments = segments.map(s => {
+                const oldStartSec = s.startPct * oldDuration;
+                const oldEndSec = s.endPct * oldDuration;
+                let newStartSec = oldStartSec;
+                let newEndSec = oldEndSec;
+                
+                // If this segment is right of or equal to the drag start point, push it right!
+                if (s.startPct >= seg.startPct) {
+                    newStartSec += gapSec;
+                    newEndSec += gapSec;
+                }
+                
+                return {
+                    ...s,
+                    startPct: newStartSec / newDuration,
+                    endPct: newEndSec / newDuration
+                };
+            });
+
+            const newBeats = (beatPositions || []).map(b => b >= (seg.startPct * oldDuration) ? b + gapSec : b);
+
+            // Patch AudioEngine in-memory — no network fetch needed
+            const track = AudioEngineService.tracks.get(trackId);
+            if (track) {
+                track.audioBuffer = newBuf;
+                track.duration = newBuf.duration;
+            }
+
+            // WaveSurfer: use loadBlob() not load(url) — load() calls fetch() internally
+            // which throws in the emulator sandbox. loadBlob() reads the Blob directly.
+            if (wavesurferRef.current) {
+                wavesurferRef.current.loadBlob(blob);
+            }
+
+            // Only update non-audio metadata so audioUrl/audioBlob props
+            // do NOT change, which would retrigger loadAndInit.
+            setSegments(updatedSegments);
+            setAudioDuration(newBuf.duration);
+            handleUpdateTrack(trackId, {
+                beatPositions: newBeats,
+                initialSegments: updatedSegments
+            });
+            setIsAnalysing(false);
+        };
+        
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+    }, [trackId, offsetSec, masterDuration, segments, trackName, artistName, albumArt, bpm, trackKey, beatPositions, volume, spotifyId, audioUrl, handleUpdateTrack]);
 
     // CTRL+S — split at playhead only for the card currently under the cursor.
     // Checking isHoveredRef prevents all expanded cards from splitting simultaneously.
@@ -663,12 +931,12 @@ export default function TrackCard({
             // Only persist the title if it's unique — don't overwrite good state with a duplicate
             ...(!isDuplicateName && { title: trackName.trim() }),
             initialVolume: volume,
-            initialZoom: zoom,
+            initialZoom: globalZoom,
             initiallyExpanded: isExpanded,
             initialSegments: segmentsRef.current,
         });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [trackName, volume, zoom, isExpanded, segments, handleUpdateTrack, trackId]);
+    }, [trackName, volume, globalZoom, isExpanded, segments, handleUpdateTrack, trackId]);
 
     // Setup polling for playhead sync + fade-out trigger.
     // Position is read from SoundTouch's stSource.position (in samples) so it
@@ -756,6 +1024,7 @@ export default function TrackCard({
                         setEqHigh(playingSeg.eqHigh);
                         setEqKills(playingSeg.eqKills || { low: false, mid: false, high: false });
                         setEffects(newEffects);
+                        setIsSegmentMuted(playingSeg.isDeleted || playingSeg.isMuted || false);
                     }
                 }
 
@@ -770,12 +1039,15 @@ export default function TrackCard({
                     }
                 }
 
-                // Keep overlay translation in sync with WaveSurfer's auto-scroll each frame.
-                // The native scroll listener handles user-initiated panning; this handles
-                // programmatic seekTo() scrolling which may outpace the event.
-                if (overlayContainerRef.current && wsScrollRef.current) {
-                    overlayContainerRef.current.style.transform =
-                        `translateX(-${wsScrollRef.current.scrollLeft}px)`;
+                // Programmatic Snap-to-Center Auto-scroll if playing off-screen
+                if (scrollContainerRef.current) {
+                    const scrollEl = scrollContainerRef.current;
+                    // Playhead position in absolute pixels on our custom width wrapper
+                    const pPx = (audioPosSec / track.audioBuffer.duration) * waveformPixelWidth;
+                    // Provide a nice 100px right-side margin before snapping
+                    if (pPx > scrollEl.scrollLeft + scrollEl.clientWidth - 100) {
+                        scrollEl.scrollLeft = Math.max(0, pPx - (scrollEl.clientWidth / 2));
+                    }
                 }
             }
             frameId = requestAnimationFrame(updatePlayhead);
@@ -833,37 +1105,37 @@ export default function TrackCard({
                             <Pencil size={16} />
                         </button>
                         {isEditing && isDuplicateName && (
-                            <span className="text-xs font-medium text-red-400 whitespace-nowrap">Name already in use</span>
+                            <span className="text-xs font-medium text-red-400 whitespace-nowrap truncate shrink-0">Name already in use</span>
                         )}
 
-                        <div className="flex items-center text-xs text-base-400 ml-4 gap-3">
-                            <span className="flex items-center gap-1">
-                                <span className="text-base-300 font-medium whitespace-nowrap">Artist:</span>
+                        <div className="flex flex-wrap items-center text-xs text-base-400 ml-2 md:ml-4 gap-2 md:gap-3 min-w-0 shrink">
+                            <span className="flex items-center gap-1 min-w-0 shrink">
+                                <span className="text-base-300 font-medium whitespace-nowrap hidden sm:inline">Artist:</span>
                                 {artistName === '[Artist Name]' && isAnalysing
                                     ? <span className="w-3 h-3 rounded-full border border-base-600 border-t-base-300 animate-spin inline-block" />
-                                    : <span className="text-base-200">{artistName}</span>
+                                    : <span className="text-base-200 truncate" title={artistName}>{artistName}</span>
                                 }
                             </span>
-                            <div className="w-1 h-1 shrink-0 rounded-full bg-base-600"></div>
-                            <span className="flex items-center gap-1">
-                                <span className="text-base-300 font-medium whitespace-nowrap">BPM:</span>
+                            <div className="w-1 h-1 shrink-0 rounded-full bg-base-600 hidden xs:block"></div>
+                            <span className="flex items-center gap-1 shrink-0">
+                                <span className="text-base-300 font-medium whitespace-nowrap hidden md:inline">BPM:</span>
                                 {bpm === '[BPM]' && isAnalysing
                                     ? <span className="w-3 h-3 rounded-full border border-base-600 border-t-base-300 animate-spin inline-block" />
-                                    : <span className="text-base-200">{bpm}</span>
+                                    : <span className="text-base-200 whitespace-nowrap">{bpm}</span>
                                 }
                             </span>
-                            <div className="w-1 h-1 shrink-0 rounded-full bg-base-600"></div>
-                            <span className="flex items-center gap-1">
-                                <span className="text-base-300 font-medium whitespace-nowrap">Key:</span>
+                            <div className="w-1 h-1 shrink-0 rounded-full bg-base-600 hidden xs:block"></div>
+                            <span className="flex items-center gap-1 shrink-0">
+                                <span className="text-base-300 font-medium whitespace-nowrap hidden lg:inline">Key:</span>
                                 {trackKey === '[key]' && isAnalysing
                                     ? <span className="w-3 h-3 rounded-full border border-base-600 border-t-base-300 animate-spin inline-block" />
-                                    : <span className="text-base-200">{trackKey}</span>
+                                    : <span className="text-base-200 whitespace-nowrap">{trackKey}</span>
                                 }
                             </span>
                         </div>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-2 shrink-0 ml-2">
                         <div className="flex items-center gap-1 bg-base-900 rounded border border-base-700 p-0.5" onClick={(e) => e.stopPropagation()}>
                             <button
                                 onMouseEnter={() => setIsDraggable(true)}
@@ -880,7 +1152,7 @@ export default function TrackCard({
                                         onDuplicate({
                                             title: trackName,
                                             initialVolume: volume,
-                                            initialZoom: zoom,
+                                            initialZoom: globalZoom,
                                             initialSegments: segmentsRef.current,
                                         });
                                     }
@@ -977,7 +1249,13 @@ export default function TrackCard({
                             <button
                                 onClick={(e) => { e.stopPropagation(); setIsMuted(!isMuted); }}
                                 disabled={!isVisible}
-                                className={`flex-1 aspect-square rounded flex items-center justify-center transition-colors border ${!isVisible ? 'bg-base-900 text-base-700 border-base-800 cursor-not-allowed' : isMuted ? 'bg-base-600 text-base-50 border-base-500' : 'bg-base-900 text-base-300 border-base-700 hover:text-base-50 hover:border-base-500'}`}
+                                className={`flex-1 aspect-square rounded flex items-center justify-center transition-colors border font-bold text-xs gap-1 ${
+                                    !isVisible
+                                        ? 'bg-base-900 text-base-700 border-base-800 cursor-not-allowed'
+                                        : isMuted
+                                            ? 'bg-yellow-500 text-black border-yellow-400 shadow-[0_0_8px_rgba(234,179,8,0.5)]'
+                                            : 'bg-base-900 text-base-300 border-base-700 hover:text-base-50 hover:border-base-500'
+                                }`}
                             >
                                 {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
                             </button>
@@ -1003,136 +1281,268 @@ export default function TrackCard({
                             />
                         </div>
 
+                        {/* Sync and Cut Buttons */}
+                        <div className="flex flex-col gap-1 w-full px-0.5 mt-1" onClick={(e) => e.stopPropagation()}>
+                            <button
+                                onClick={handleSync}
+                                disabled={!isVisible || !audioUrl || bpm === '[BPM]' || isNaN(parseFloat(bpm))}
+                                className="w-full text-[10px] font-bold tracking-widest uppercase rounded py-1 transition-colors border bg-base-900 border-base-700 text-base-300 hover:text-base-50 hover:border-base-500 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95"
+                                title={bpm === '[BPM]' ? 'Waiting for analysis...' : `Sync segment to Master BPM (${masterBpm})`}
+                            >
+                                Sync to Master
+                            </button>
+                            <div className="flex gap-2 w-full px-2 mb-2">
+                                <button
+                                    onClick={handleToggleMute}
+                                    disabled={!isVisible || !audioUrl}
+                                    className={`w-full text-[10px] font-bold tracking-widest uppercase rounded py-1 transition-colors border ${
+                                        segments.find(s => s.id === activeSegmentId)?.isMuted 
+                                        ? 'bg-yellow-500/20 border-yellow-500/50 text-yellow-100 hover:bg-yellow-500/30' 
+                                        : 'bg-base-900 border-base-700 text-base-300 hover:text-base-50 hover:border-base-500'
+                                    } disabled:opacity-40 active:scale-95`}
+                                    title="Mute this segment (Keep visible)"
+                                >
+                                    Mute
+                                </button>
+                                <button
+                                    onClick={handleToggleDelete}
+                                    disabled={!isVisible || !audioUrl}
+                                    className={`w-full text-[10px] font-bold tracking-widest uppercase rounded py-1 transition-colors border ${
+                                        segments.find(s => s.id === activeSegmentId)?.isDeleted 
+                                        ? 'bg-red-500/20 border-red-500/50 text-red-100 hover:bg-red-500/30' 
+                                        : 'bg-base-900 border-base-700 text-base-300 hover:text-base-50 hover:border-base-500'
+                                    } disabled:opacity-40 active:scale-95`}
+                                    title="Delete this segment (Creates visual gap)"
+                                >
+                                    Delete
+                                </button>
+                            </div>
+
+                            <div className="flex gap-2 w-full px-2 mb-2">
+                                <button
+                                    onClick={async (e) => {
+                                        e.stopPropagation();
+                                        const seg = segmentsRef.current.find(s => s.id === activeSegmentIdRef.current);
+                                        if (!seg) return;
+
+                                        const trackObj = AudioEngineService.tracks.get(trackId);
+                                        if (!trackObj || !trackObj.audioBuffer) return;
+
+                                        // 1. Slice audioBuffer
+                                        const oldBuf = trackObj.audioBuffer;
+                                        const startFrame = Math.floor(seg.startPct * oldBuf.length);
+                                        const endFrame = Math.floor(seg.endPct * oldBuf.length);
+                                        const newLen = endFrame - startFrame;
+                                        if (newLen <= 0) return;
+
+                                        const newBuf = AudioEngineService.ctx.createBuffer(oldBuf.numberOfChannels, newLen, oldBuf.sampleRate);
+                                        for (let i = 0; i < oldBuf.numberOfChannels; i++) {
+                                            newBuf.getChannelData(i).set(oldBuf.getChannelData(i).subarray(startFrame, endFrame));
+                                        }
+
+                                        // 2. Convert to WAV Blob
+                                        const wavObj = audioBufferToWAV(newBuf);
+
+                                        // 3. Offset beat grid
+                                        const offsetSec = seg.startPct * oldBuf.duration;
+                                        const newBeats = (beatPositions || [])
+                                            .filter(b => b >= offsetSec && b <= (seg.endPct * oldBuf.duration))
+                                            .map(b => b - offsetSec);
+
+                                        // 4. Add as a completely NEW track — pass raw blob to bypass fetch
+                                        const extractedBlob = new Blob([wavObj], { type: 'audio/wav' });
+                                        handleAddTrack({
+                                            title: `${trackName} (Extracted)`,
+                                            audioUrl: URL.createObjectURL(extractedBlob),
+                                            audioBlob: extractedBlob,
+                                            spotifyId: null,
+                                            originalSourceId: spotifyId || audioUrl,
+                                            artistName: artistName,
+                                            albumArt: albumArt,
+                                            bpm: bpm,
+                                            trackKey: trackKey,
+                                            beatPositions: newBeats,
+                                            initialVolume: volume,
+                                            initialSegments: [{
+                                                ...seg, 
+                                                id: Date.now(), 
+                                                startPct: 0, 
+                                                endPct: 1, 
+                                                fadeIn: 0, 
+                                                fadeOut: 0 
+                                            }]
+                                        });
+                                    }}
+                                    disabled={!isVisible || !audioUrl}
+                                    className="w-full text-[10px] font-bold tracking-widest uppercase rounded py-1 transition-colors border bg-base-900 border-base-700 text-base-300 hover:text-base-50 hover:border-base-500 disabled:opacity-40 active:scale-95"
+                                    title="Extract this segment into a completely new track"
+                                >
+                                    Extract
+                                </button>
+                            </div>
+                        </div>
                     </div>
 
-                    {/* Right column — stretches to match left panel height.
-                         Waveform fills remaining space; zoom slider sits at the bottom,
-                         level with the volume slider on the left. */}
-                    <div className="flex flex-col flex-1 min-w-0 gap-2">
-                        <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden bg-base-900 border border-base-700 shadow-inner rounded">
-                            {/* Relative wrapper so overlays are positioned against waveform area.
-                                overflow-hidden clips overlays that extend beyond the viewport;
-                                WaveSurfer scrolls internally so clipping is correct. */}
-                            <div className="relative h-full min-w-full overflow-hidden">
-                                <div ref={waveformRef} className="h-full min-w-full"></div>
+                    {/* Right column (Timeline Lane) */}
+                    <div ref={laneRef} className="flex flex-col flex-1 min-w-0 bg-[#0F111A] border-l border-base-700/50 shadow-inner relative overflow-hidden">
+                        {/* The Actual Track Clip */}
+                        <div 
+                            className="absolute top-0 bottom-0 flex flex-col bg-base-900 border border-base-700 shadow-xl rounded overflow-hidden"
+                            style={{
+                                width: masterDuration > 0 && audioDuration > 0 ? `${(audioDuration / masterDuration) * 100}%` : '100%',
+                                left: masterDuration > 0 ? `${(offsetSec / masterDuration) * 100}%` : '0%',
+                                transition: isDragged ? 'none' : 'left 0.1s ease-out'
+                            }}
+                        >
+                            {/* Draggable Title Bar */}
+                            <div 
+                                className="h-4 bg-base-800/80 border-b border-base-700 hover:bg-base-700 hover:text-white cursor-ew-resize flex items-center px-2 text-[9px] text-base-300 font-bold tracking-widest uppercase select-none z-20 shrink-0"
+                                onMouseDown={handleOffsetDragStart}
+                                title="Click and drag to slide clip along master timeline"
+                            >
+                                ≡ Drag to Slide (+{offsetSec.toFixed(2)}s)
+                            </div>
 
-                                {/* Single overlay container — translateX is updated by the WaveSurfer
-                                    'scroll' event so all overlays pan in sync with the waveform canvas. */}
-                                <div
-                                    ref={overlayContainerRef}
-                                    className="absolute inset-0 pointer-events-none"
-                                    style={{ overflow: 'visible' }}
-                                >
-                                    {/* Fade overlays — rendered for every segment that has a non-zero fade value.
-                                    Reading from segment data directly avoids any lag from active-state updates. */}
-                                    {audioDuration > 0 && (zoom === 0 || waveformPixelWidth > 0) && segments.flatMap(seg => {
-                                        const overlays = [];
-                                        if (seg.fadeIn > 0) {
-                                            const fw = Math.min(seg.fadeIn / audioDuration, seg.endPct - seg.startPct);
-                                            const style = zoom === 0
-                                                ? { left: `${seg.startPct * 100}%`, width: `${fw * 100}%`, height: '100%' }
-                                                : { left: seg.startPct * waveformPixelWidth, width: fw * waveformPixelWidth, height: '100%' };
-                                            overlays.push(
-                                                <svg key={`fi-${seg.id}`} className="absolute inset-y-0 pointer-events-none z-[2]" style={style} preserveAspectRatio="none" viewBox="0 0 100 100">
-                                                    <polygon points="0,0 100,0 0,100" fill="rgba(8,10,14,0.5)" />
-                                                </svg>
-                                            );
-                                        }
-                                        if (seg.fadeOut > 0) {
-                                            const fw = Math.min(seg.fadeOut / audioDuration, seg.endPct - seg.startPct);
-                                            const style = zoom === 0
-                                                ? { left: `${(seg.endPct - fw) * 100}%`, width: `${fw * 100}%`, height: '100%' }
-                                                : { left: (seg.endPct - fw) * waveformPixelWidth, width: fw * waveformPixelWidth, height: '100%' };
-                                            overlays.push(
-                                                <svg key={`fo-${seg.id}`} className="absolute inset-y-0 pointer-events-none z-[2]" style={style} preserveAspectRatio="none" viewBox="0 0 100 100">
-                                                    <polygon points="0,0 100,0 100,100" fill="rgba(8,10,14,0.5)" />
-                                                </svg>
-                                            );
-                                        }
-                                        return overlays;
-                                    })}
+                            {/* Consolidated Scroll Viewport for Syncing WaveSurfer and Bars Natively */}
+                            <div 
+                                ref={scrollContainerRef}
+                                className="relative flex-1 min-w-full overflow-x-auto overflow-y-hidden scrollbar-hide bg-base-900"
+                            >
+                                {/* Inner Track Scale Canvas — stretches to waveformPixelWidth so native scrolling captures everything */}
+                                <div style={{ width: waveformPixelWidth > 0 ? waveformPixelWidth : '100%', minWidth: '100%', height: '100%', position: 'relative' }}>
+                                    
+                                    {/* WaveSurfer rendering target */}
+                                    <div ref={waveformRef} className="absolute inset-0"></div>
+                                    
+                                    {/* Locked Visual Overlay Target */}
+                                    <div className="absolute inset-0 pointer-events-none z-[15]">
+                                        
+                                        {/* Fade overlays */}
+                                        {audioDuration > 0 && segments.flatMap(seg => {
+                                            const overlays = [];
+                                            if (seg.fadeIn > 0) {
+                                                const fw = Math.min(seg.fadeIn / audioDuration, seg.endPct - seg.startPct);
+                                                const style = globalZoom === 0
+                                                    ? { left: `${seg.startPct * 100}%`, width: `${fw * 100}%`, height: '100%' }
+                                                    : { left: seg.startPct * waveformPixelWidth, width: fw * waveformPixelWidth, height: '100%' };
+                                                overlays.push(
+                                                    <svg key={`fi-${seg.id}`} className="absolute inset-y-0 pointer-events-none z-[2]" style={style} preserveAspectRatio="none" viewBox="0 0 100 100">
+                                                        <polygon points="0,0 100,0 0,100" fill="rgba(8,10,14,0.5)" />
+                                                    </svg>
+                                                );
+                                            }
+                                            if (seg.fadeOut > 0) {
+                                                const fw = Math.min(seg.fadeOut / audioDuration, seg.endPct - seg.startPct);
+                                                const style = globalZoom === 0
+                                                    ? { left: `${(seg.endPct - fw) * 100}%`, width: `${fw * 100}%`, height: '100%' }
+                                                    : { left: (seg.endPct - fw) * waveformPixelWidth, width: fw * waveformPixelWidth, height: '100%' };
+                                                overlays.push(
+                                                    <svg key={`fo-${seg.id}`} className="absolute inset-y-0 pointer-events-none z-[2]" style={style} preserveAspectRatio="none" viewBox="0 0 100 100">
+                                                        <polygon points="0,0 100,0 100,100" fill="rgba(8,10,14,0.5)" />
+                                                    </svg>
+                                                );
+                                            }
+                                            return overlays;
+                                        })}
 
-                                    {/* Beat markers — thin vertical lines at speed-adjusted beat positions.
-                                    Only shown at zoom >= 25 to avoid visual noise at low zoom levels.
-                                    Lines use fractional viewBox coords so they stay pixel-crisp. */}
-                                    {zoom >= 25 && audioDuration > 0 && adjustedBeatPositions.length > 0 && waveformPixelWidth > 0 && (
-                                        <svg
-                                            className="absolute inset-y-0 left-0 pointer-events-none z-15"
-                                            style={{ width: waveformPixelWidth, height: '100%' }}
-                                            viewBox="0 0 1 1"
-                                            preserveAspectRatio="none"
-                                        >
-                                            {adjustedBeatPositions.map((t, i) => (
-                                                <line
-                                                    key={i}
-                                                    x1={t / audioDuration} y1={0}
-                                                    x2={t / audioDuration} y2={1}
-                                                    stroke="#59546C"
-                                                    strokeWidth="1"
-                                                    vectorEffect="non-scaling-stroke"
-                                                />
-                                            ))}
-                                        </svg>
-                                    )}
+                                        {/* Beat markers */}
+                                        {globalZoom >= 25 && audioDuration > 0 && adjustedBeatPositions.length > 0 && waveformPixelWidth > 0 && (
+                                            <div className="absolute inset-y-0 left-0 pointer-events-none z-[15]" style={{ width: waveformPixelWidth }}>
+                                                {adjustedBeatPositions.map((t, i) => (
+                                                    <div
+                                                        key={`beat-${i}`}
+                                                        className="absolute top-0 bottom-0 w-px bg-[#59546C]"
+                                                        style={{ left: `${(t / audioDuration) * 100}%` }}
+                                                    />
+                                                ))}
+                                            </div>
+                                        )}
 
-                                    {/* Segment region highlights — one per segment, covers startPct→endPct.
-                                    Active segment shows a white border; others are unstyled.
-                                    pointer-events-none so WaveSurfer handles all click/drag/seek events;
-                                    segment activation is triggered via ws.on('interaction') instead. */}
-                                    {audioUrl && segments.map(seg => (
-                                        <div
-                                            key={`hl-${seg.id}`}
-                                            className={`absolute top-0 bottom-0 pointer-events-none z-[3] ${seg.id === activeSegmentId ? 'border-[3px] border-white/50 rounded-sm' : ''}`}
-                                            style={{
-                                                left: zoom > 0 && waveformPixelWidth > 0
-                                                    ? seg.startPct * waveformPixelWidth
-                                                    : `${seg.startPct * 100}%`,
-                                                width: zoom > 0 && waveformPixelWidth > 0
-                                                    ? (seg.endPct - seg.startPct) * waveformPixelWidth
-                                                    : `${(seg.endPct - seg.startPct) * 100}%`,
-                                            }}
-                                        />
-                                    ))}
+                                        {/* Segment region highlights */}
+                                        {audioUrl && segments.map(seg => (
+                                            <div
+                                                key={`hl-${seg.id}`}
+                                                className={`absolute top-0 bottom-0 pointer-events-none ${draggedSegmentState?.id === seg.id ? 'z-50 opacity-90 backdrop-blur-md bg-base-800/50 shadow-2xl' : 'z-[3]'} ${seg.id === activeSegmentId ? 'border-[3px] border-white/50 rounded-sm' : ''} ${seg.isDeleted ? 'bg-base-900/95 backdrop-blur-[2px] border-y-2 border-dashed border-base-600 shadow-[inset_0_0_20px_rgba(0,0,0,0.5)]' : seg.isMuted ? 'bg-black/60 grayscale backdrop-brightness-50' : ''}`}
+                                                style={{
+                                                    left: globalZoom > 0 && waveformPixelWidth > 0
+                                                        ? seg.startPct * waveformPixelWidth
+                                                        : `${seg.startPct * 100}%`,
+                                                    width: globalZoom > 0 && waveformPixelWidth > 0
+                                                        ? (seg.endPct - seg.startPct) * waveformPixelWidth
+                                                        : `${(seg.endPct - seg.startPct) * 100}%`,
+                                                    transform: draggedSegmentState?.id === seg.id ? `translateX(${draggedSegmentState.dx}px)` : 'none'
+                                                }}
+                                            >
+                                                {!seg.isDeleted && (
+                                                    <div 
+                                                        className="pointer-events-auto cursor-ew-resize absolute top-0 left-0 right-0 h-4 flex items-center justify-center bg-white/20 border-b border-white/30 hover:bg-white/30 transition-colors"
+                                                        onMouseDown={(e) => handleSegmentDragStart(e, seg)}
+                                                        title="Drag here to slide segment independently"
+                                                    >
+                                                        <div className="w-8 h-1 rounded-full bg-white/80 shadow" />
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ))}
 
-                                    {/* Segment cut lines — anchored to absolute time position.
-                                    Uses pixel left at zoom>0 (same math as fade overlays),
-                                    falls back to % at zoom=0 where waveform fills container. */}
-                                    {segments.slice(1).map(seg => (
-                                        <div
-                                            key={seg.id}
-                                            className="absolute top-0 bottom-0 w-2 -translate-x-1/2 cursor-col-resize z-10 pointer-events-auto group"
-                                            style={{
-                                                left: zoom > 0 && waveformPixelWidth > 0
-                                                    ? seg.startPct * waveformPixelWidth
-                                                    : `${seg.startPct * 100}%`
-                                            }}
-                                        >
-                                            <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-orange-400/90 group-hover:bg-orange-300 transition-colors pointer-events-none" />
-                                        </div>
-                                    ))}
+                                        {/* Segment cut lines */}
+                                        {segments.slice(1).map(seg => (
+                                            <div
+                                                key={seg.id}
+                                                className="absolute top-0 bottom-0 w-2 -translate-x-1/2 cursor-col-resize z-10 pointer-events-auto group"
+                                                style={{
+                                                    left: globalZoom > 0 && waveformPixelWidth > 0
+                                                        ? seg.startPct * waveformPixelWidth
+                                                        : `${seg.startPct * 100}%`
+                                                }}
+                                                onMouseDown={(e) => {
+                                                    e.stopPropagation();
+                                                    const originalStart = seg.startPct;
+                                                    const startX = e.clientX;
+                                                    const audioDur = durationRef.current || 1;
+                                                    const parentWidth = waveformPixelWidth || 1;
+                                                    
+                                                    const handleMove = (ev) => {
+                                                        const dx = ev.clientX - startX;
+                                                        const dPct = dx / parentWidth;
+                                                        const newPct = Math.max(0, Math.min(1, originalStart + dPct));
+                                                        
+                                                        setSegments(prev => {
+                                                            const idx = prev.findIndex(s => s.id === seg.id);
+                                                            if (idx === -1) return prev;
+                                                            const arr = [...prev];
+                                                            arr[idx - 1] = { ...arr[idx - 1], endPct: newPct };
+                                                            arr[idx] = { ...arr[idx], startPct: newPct };
+                                                            return arr;
+                                                        });
+                                                    };
+                                                    
+                                                    const handleUp = () => {
+                                                        document.removeEventListener('mousemove', handleMove);
+                                                        document.removeEventListener('mouseup', handleUp);
+                                                        setSegments(finalSegs => {
+                                                            handleUpdateTrack(trackId, { initialSegments: finalSegs });
+                                                            return finalSegs;
+                                                        });
+                                                    };
+                                                    
+                                                    document.addEventListener('mousemove', handleMove);
+                                                    document.addEventListener('mouseup', handleUp);
+                                                }}
+                                            >
+                                                <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px bg-orange-400/90 group-hover:bg-orange-300 transition-colors pointer-events-none" />
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
-                        {/* Bottom row — timestamp (left) and zoom slider (right) */}
-                        <div className="flex items-center justify-between w-full" onClick={(e) => e.stopPropagation()}>
-                            {/* Playhead / duration timestamp */}
-                            <span className="text-xs font-mono text-base-400 tabular-nums shrink-0 select-none">
-                                {formatTimestamp(displayTimeSec)}&nbsp;–&nbsp;{formatTimestamp(audioDuration)}
+                        {/* Timeline Lane base layer */}
+                        <div className="absolute inset-0 flex items-end px-2 pb-1 pointer-events-none z-[1]">
+                            <span className="text-[10px] font-mono text-base-600/50 mix-blend-plus-lighter tabular-nums shrink-0 select-none bg-base-900/50 backdrop-blur-sm px-1.5 rounded">
+                                {formatTimestamp((audioDuration || 0) + (offsetSec || 0))}
                             </span>
-
-                            {/* Zoom Slider */}
-                            <div className="flex items-center gap-2 shrink-0">
-                                <ZoomIn size={12} className="text-base-300 shrink-0" />
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="100"
-                                    value={zoom}
-                                    onChange={(e) => setZoom(Number(e.target.value))}
-                                    className="w-24 h-1 bg-base-700 rounded-lg appearance-none cursor-pointer accent-base-500 outline-none"
-                                />
-                            </div>
                         </div>
                     </div>
                 </div>}
@@ -1200,7 +1610,7 @@ export default function TrackCard({
                                                     </button>
                                                 )}
                                             </span>
-                                            <div className="flex items-center gap-3">
+                                        <div className="flex items-center gap-3">
                                                 {speedInputVal !== null ? (
                                                     <input
                                                         type="text"
@@ -1224,7 +1634,7 @@ export default function TrackCard({
                                                 ) : (
                                                     <span
                                                         className="text-xs font-mono text-base-300 w-10 text-right cursor-text hover:text-base-100 transition-colors"
-                                                        title="Click to edit"
+                                                        title="Click to edit speed"
                                                         onClick={(e) => { e.stopPropagation(); setSpeedInputVal(Number(speed).toFixed(2)); }}
                                                     >
                                                         {Number(speed).toFixed(2)}x
@@ -1242,6 +1652,33 @@ export default function TrackCard({
                                                 />
                                             </div>
                                         </div>
+                                        {/* BPM override input — type a target BPM and the speed adjusts */}
+                                        {bpm && bpm !== '[BPM]' && !isNaN(parseFloat(bpm)) && (
+                                            <div className="flex items-center justify-between mt-1">
+                                                <span className="text-xs text-base-500">Target BPM</span>
+                                                <input
+                                                    type="number"
+                                                    min="20"
+                                                    max="300"
+                                                    step="1"
+                                                    defaultValue={Math.round(parseFloat(bpm))}
+                                                    key={bpm}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') e.target.blur(); }}
+                                                    onBlur={(e) => {
+                                                        e.stopPropagation();
+                                                        const targetBpm = parseFloat(e.target.value);
+                                                        const originalBpm = parseFloat(bpm);
+                                                        if (!isNaN(targetBpm) && originalBpm > 0) {
+                                                            const newSpeed = Math.min(SPEED_MAX, Math.max(SPEED_MIN, targetBpm / originalBpm));
+                                                            setSpeedWithSync(newSpeed);
+                                                        }
+                                                    }}
+                                                    className="text-xs font-mono text-base-100 w-16 text-right bg-base-700 rounded px-1.5 py-0.5 outline-none border border-base-600 focus:border-base-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                    title="Type a target BPM to set speed automatically"
+                                                />
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
 

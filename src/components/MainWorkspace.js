@@ -114,14 +114,15 @@ export default function MainWorkspace() {
                             initialPitch={track.initialPitch}
                             initialSpeed={track.initialSpeed}
                             initialFadeIn={track.initialFadeIn}
-                            initialFadeOut={track.initialFadeOut}
                             initialZoom={track.initialZoom}
+                            offsetSec={track.offsetSec}
                             artistName={track.artistName}
                             albumArt={track.albumArt}
                             spotifyId={track.spotifyId}
                             bpm={track.bpm}
                             trackKey={track.trackKey}
                             audioUrl={track.audioUrl}
+                            audioBlob={track.audioBlob}
                             beatPositions={track.beatPositions}
                             initialSegments={track.initialSegments}
                             isMissing={track.isMissing ?? false}

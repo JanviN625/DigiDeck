@@ -8,7 +8,8 @@ export const DEFAULT_SETTINGS = {
   defaultFadeIn: 0,
   defaultFadeOut: 0,
   keybinds: {
-    splitAtPlayhead: { key: 's', ctrl: true, shift: false, alt: false },
+    splitAtPlayhead: { key: 'x', ctrl: false, shift: false, alt: false },
+    saveProject:     { key: 's', ctrl: true, shift: false, alt: false },
     playPause:       { key: ' ', ctrl: false, shift: false, alt: false },
   },
 };

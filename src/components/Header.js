@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Pencil, Play, Pause, Square } from 'lucide-react';
-import { Avatar, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, DropdownSection, Spinner } from '@heroui/react';
+import { Pencil, Play, Pause, Square, ZoomIn, Activity, Undo, Redo } from 'lucide-react';
+import { Avatar, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, DropdownSection, Spinner, Slider } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
 import { useFirebaseAuth } from '../firebase/firebase';
 import { useMix } from '../spotify/appContext';
@@ -10,7 +10,7 @@ import { useSettings, matchesKeybind } from '../utils/useSettings';
 
 export default function Header() {
     const { user, signOut } = useFirebaseAuth();
-    const { tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop } = useMix();
+    const { tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, handleClearAllTracks, handleUndo, handleRedo, canUndo, canRedo } = useMix();
     const { settings } = useSettings();
     const [projectName, setProjectName] = useState('Untitled project');
     const [isEditingProject, setIsEditingProject] = useState(false);
@@ -18,6 +18,8 @@ export default function Header() {
     const previewSourceRef = useRef(null);
     const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
     const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+    const [saveAlert, setSaveAlert] = useState(false);
+    const [showResetConfirm, setShowResetConfirm] = useState(false);
 
     useEffect(() => {
         const handleKeydown = (e) => {
@@ -27,10 +29,19 @@ export default function Header() {
                 e.preventDefault();
                 setUniversalIsPlaying(v => !v);
             }
+            if (matchesKeybind(e, settings.keybinds.saveProject)) {
+                e.preventDefault();
+                handleSave();
+            }
         };
         window.addEventListener('keydown', handleKeydown);
         return () => window.removeEventListener('keydown', handleKeydown);
-    }, [settings.keybinds.playPause, setUniversalIsPlaying]);
+    }, [settings.keybinds, setUniversalIsPlaying]);
+
+    const handleSave = () => {
+        setSaveAlert(true);
+        setTimeout(() => setSaveAlert(false), 2000);
+    };
 
     const handleMixPreview = async () => {
         if (renderingFor) return;
@@ -136,9 +147,10 @@ export default function Header() {
                 </div>
             </div>
 
-            {/* Center — transport (absolute so it doesn't shift left/right content) */}
+            {/* Center — transport */}
             {tracks.length > 0 && (
-                <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1 bg-base-900/60 border border-base-700 rounded-lg px-2 py-1.5">
+                <div className="flex-1 flex justify-center min-w-0 pointer-events-none mr-4">
+                    <div className="flex items-center gap-1 bg-base-900/60 border border-base-700 rounded-lg px-2 py-1.5 pointer-events-auto">
                     <button
                         onClick={() => setUniversalIsPlaying(v => !v)}
                         className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${
@@ -159,18 +171,80 @@ export default function Header() {
                     <div className={`w-1.5 h-1.5 rounded-full transition-colors ${
                         universalIsPlaying ? 'bg-base-450 animate-pulse' : 'bg-base-500'
                     }`} />
-                    <span className={`text-[10px] font-bold tracking-widest uppercase mr-1 transition-colors ${
+                    <span className={`text-[10px] font-bold tracking-widest uppercase mr-3 transition-colors ${
                         universalIsPlaying ? 'text-base-450' : 'text-base-500'
                     }`}>
                         {universalIsPlaying ? 'Live' : 'Idle'}
                     </span>
+                    <div className="w-px h-4 bg-base-700 mx-1" />
+                    <div className="flex items-center gap-1.5 px-2 group">
+                        <Activity size={12} className="text-base-500 group-hover:text-base-300 transition-colors" />
+                        <input
+                            type="number"
+                            min="20"
+                            max="300"
+                            value={masterBpm}
+                            onChange={(e) => setMasterBpm(Number(e.target.value))}
+                            className="bg-transparent border border-transparent hover:border-base-700 focus:border-base-500 text-xs font-mono text-base-100 rounded px-1 w-12 outline-none text-center transition-colors appearance-none scrollbar-hide"
+                            title="Master BPM"
+                            style={{ MozAppearance: 'textfield' }} // hide arrows in firefox
+                        />
+                        <style>{`
+                            input[type="number"]::-webkit-inner-spin-button,
+                            input[type="number"]::-webkit-outer-spin-button {
+                                -webkit-appearance: none;
+                                margin: 0;
+                            }
+                        `}</style>
+                    </div>
+                    <div className="w-px h-4 bg-base-700 mx-1" />
+                    <div className="flex items-center gap-2 group w-32 px-1">
+                        <ZoomIn size={12} className="text-base-500 group-hover:text-base-300 transition-colors shrink-0" />
+                        <Slider
+                            size="sm"
+                            step={5}
+                            maxValue={100}
+                            minValue={0}
+                            value={globalZoom}
+                            onChange={setGlobalZoom}
+                            className="w-full"
+                            classNames={{
+                                track: "bg-base-700/50 border-y border-base-900",
+                                filler: "bg-base-500 group-hover:bg-base-400 transition-colors",
+                                thumb: "w-4 h-4 bg-base-300 hover:bg-base-200 transition-colors shadow-md rounded-full cursor-grab active:cursor-grabbing"
+                            }}
+                            renderThumb={() => <div />}
+                        />
+                    </div>
+                    </div>
                 </div>
             )}
 
             {/* Right — actions + avatar */}
             <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1 mr-4 border-r border-base-700 pr-4">
+                    <button
+                        onClick={handleUndo}
+                        disabled={!canUndo}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${canUndo ? 'text-base-100 bg-base-800 hover:bg-base-700 hover:text-white border border-base-700' : 'text-base-600 bg-transparent border border-transparent cursor-not-allowed'}`}
+                        title="Undo"
+                    >
+                        <Undo size={14} /> Undo
+                    </button>
+                    <button
+                        onClick={handleRedo}
+                        disabled={!canRedo}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${canRedo ? 'text-base-100 bg-base-800 hover:bg-base-700 hover:text-white border border-base-700' : 'text-base-600 bg-transparent border border-transparent cursor-not-allowed'}`}
+                        title="Redo"
+                    >
+                        <Redo size={14} /> Redo
+                    </button>
+                </div>
                 <div className="flex items-center gap-0.5">
-                    <button className="text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors">Save</button>
+                    <button onClick={handleSave} className="text-sm font-medium px-3 py-1.5 rounded-md transition-colors w-16 text-center select-none group">
+                        <span className={`block transition-opacity duration-200 ${saveAlert ? 'opacity-0' : 'opacity-100 text-base-400 group-hover:text-base-100 group-hover:bg-base-700/60'}`}>Save</span>
+                        <span className={`block text-emerald-400 absolute top-1/2 -translate-y-1/2 transition-opacity duration-200 ${saveAlert ? 'opacity-100' : 'opacity-0'}`}>Saved!</span>
+                    </button>
                     <button className="text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors">Load</button>
                     <button
                         onClick={handleExport}
@@ -179,6 +253,31 @@ export default function Header() {
                     >
                         {renderingFor === 'export' ? 'Exporting…' : 'Export'}
                     </button>
+                    {showResetConfirm ? (
+                        <div className="flex items-center gap-1.5 animate-in fade-in duration-150">
+                            <span className="text-xs text-base-400">Reset workspace?</span>
+                            <button
+                                onClick={() => { handleClearAllTracks(); setShowResetConfirm(false); }}
+                                className="text-xs font-semibold text-red-400 hover:text-red-300 px-2 py-0.5 rounded bg-red-900/20 hover:bg-red-900/40 transition-colors"
+                            >
+                                Reset
+                            </button>
+                            <button
+                                onClick={() => setShowResetConfirm(false)}
+                                className="text-xs text-base-500 hover:text-base-300 px-2 py-0.5 rounded transition-colors"
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    ) : (
+                        <button
+                            onClick={() => setShowResetConfirm(true)}
+                            className="text-sm text-red-500 hover:text-red-300 hover:bg-red-900/30 px-3 py-1.5 rounded-md transition-colors"
+                            title="Remove all tracks and start fresh"
+                        >
+                            Reset
+                        </button>
+                    )}
                 </div>
 
                 <div className="w-px h-5 bg-base-700" />
