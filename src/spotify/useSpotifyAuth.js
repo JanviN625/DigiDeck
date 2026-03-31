@@ -16,6 +16,7 @@ export function useSpotifyAuth() {
   const [loggedIn, setLoggedIn] = useState(isLoggedIn());
   const [profile, setProfile] = useState(null);
   const [userId, setUserId] = useState(localStorage.getItem(SPOTIFY_USER_ID_KEY));
+  const [isLoading, setIsLoading] = useState(false);
   const callbackRan = useRef(false);
 
   // Exchange auth code for token on callback
@@ -24,6 +25,7 @@ export function useSpotifyAuth() {
     if (!hasCode) return;
     if (callbackRan.current) return;
     callbackRan.current = true;
+    setIsLoading(true);
 
     handleCallback().then(success => {
       if (success) {
@@ -32,6 +34,7 @@ export function useSpotifyAuth() {
       } else {
         console.error('[Spotify Auth] Login failed. Check earlier errors for details.');
       }
+      setIsLoading(false);
     });
   }, []);
 
@@ -62,5 +65,5 @@ export function useSpotifyAuth() {
     setLoggedIn(false);
   };
 
-  return { loggedIn, profile, userId, login, logout };
+  return { loggedIn, profile, userId, isLoading, login, logout };
 }

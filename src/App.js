@@ -7,7 +7,7 @@ import AuthScreen from './components/AuthScreen';
 import { useFirebaseAuth } from './firebase/firebase';
 
 function App() {
-  const { user, loading } = useFirebaseAuth();
+  const { loggedIn, profile, login, logout } = useSpotifyAuth();
 
   if (loading) {
     return (
