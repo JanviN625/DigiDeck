@@ -84,32 +84,38 @@ export const useFirebaseAuth = () => {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      if (currentUser) {
-        const ref = userRef(currentUser.uid);
-        const userSnap = await getDoc(ref);
+      try {
+        if (currentUser) {
+          const ref = userRef(currentUser.uid);
+          const userSnap = await getDoc(ref);
 
-        if (!userSnap.exists()) {
-          await setDoc(ref, {
-            uid: currentUser.uid,
-            email: currentUser.email,
-            displayName: currentUser.displayName || null,
-            avatarUrl: currentUser.photoURL || null,
-            createdAt: serverTimestamp(),
-            lastLoginAt: serverTimestamp(),
-            spotify: null,
-          });
+          if (!userSnap.exists()) {
+            await setDoc(ref, {
+              uid: currentUser.uid,
+              email: currentUser.email,
+              displayName: currentUser.displayName || null,
+              avatarUrl: currentUser.photoURL || null,
+              createdAt: serverTimestamp(),
+              lastLoginAt: serverTimestamp(),
+              spotify: null,
+            });
+          } else {
+            // Update lastLoginAt on consecutive logins
+            const dbUpdates = { lastLoginAt: serverTimestamp() };
+            // Ensure Google Auth photo priority is respected
+            if (currentUser.photoURL) dbUpdates.avatarUrl = currentUser.photoURL;
+            await setDoc(ref, dbUpdates, { merge: true });
+          }
+          setUser(currentUser);
         } else {
-          // Update lastLoginAt on consecutive logins
-          const dbUpdates = { lastLoginAt: serverTimestamp() };
-          // Ensure Google Auth photo priority is respected
-          if (currentUser.photoURL) dbUpdates.avatarUrl = currentUser.photoURL;
-          await setDoc(ref, dbUpdates, { merge: true });
+          setUser(null);
         }
-        setUser(currentUser);
-      } else {
-        setUser(null);
+      } catch (err) {
+        console.error('[Firebase] Auth state handler error:', err);
+        if (currentUser) setUser(currentUser);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return () => unsubscribe();
