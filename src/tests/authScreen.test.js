@@ -160,9 +160,7 @@ describe('AuthScreen — email login flow', () => {
         render(<AuthScreen />);
         fillLogin();
         fireEvent.click(screen.getByText('Log In'));
-        await waitFor(() =>
-            expect(screen.getByText('auth/wrong-password')).toBeInTheDocument()
-        );
+        expect(await screen.findByText('auth/wrong-password')).toBeInTheDocument();
     });
 
     it('does not call loginWithEmail when Sign Up is clicked in login mode', () => {
@@ -193,9 +191,7 @@ describe('AuthScreen — sign-up flow', () => {
         fireEvent.click(screen.getByText('Sign Up'));
         fillSignUp();
         fireEvent.click(screen.getByText('Sign Up'));
-        await waitFor(() =>
-            expect(screen.getByText('auth/email-already-in-use')).toBeInTheDocument()
-        );
+        expect(await screen.findByText('auth/email-already-in-use')).toBeInTheDocument();
     });
 });
 
@@ -213,9 +209,7 @@ describe('AuthScreen — Google login', () => {
         mockLoginWithGoogle.mockRejectedValueOnce(new Error('popup_closed_by_user'));
         render(<AuthScreen />);
         fireEvent.click(screen.getByText(/Continue with Google/i));
-        await waitFor(() =>
-            expect(screen.getByText('popup_closed_by_user')).toBeInTheDocument()
-        );
+        expect(await screen.findByText('popup_closed_by_user')).toBeInTheDocument();
     });
 });
 
@@ -224,9 +218,10 @@ describe('AuthScreen — Google login', () => {
 describe('AuthScreen — Enter key submission', () => {
     it('submits the login form when the form onSubmit is triggered', async () => {
         mockLoginWithEmail.mockResolvedValueOnce(undefined);
-        const { container } = render(<AuthScreen />);
+        render(<AuthScreen />);
         fillLogin();
-        const form = container.querySelector('form');
+        // eslint-disable-next-line testing-library/no-node-access, testing-library/no-container
+        const form = screen.getByPlaceholderText('Email').closest('form');
         fireEvent.submit(form);
         await waitFor(() => expect(mockLoginWithEmail).toHaveBeenCalled());
     });
@@ -239,12 +234,13 @@ describe('AuthScreen — loading state', () => {
         let resolveLogin;
         mockLoginWithEmail.mockReturnValueOnce(new Promise(res => { resolveLogin = res; }));
 
-        const { container } = render(<AuthScreen />);
+        render(<AuthScreen />);
         fillLogin();
         fireEvent.click(screen.getByText('Log In'));
 
         await waitFor(() => {
-            expect(container.querySelector('.animate-spin')).toBeTruthy();
+            // eslint-disable-next-line testing-library/no-node-access
+            expect(document.querySelector('.animate-spin')).toBeTruthy();
         });
 
         resolveLogin();

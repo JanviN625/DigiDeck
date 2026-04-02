@@ -188,7 +188,7 @@ describe('LibraryPanel — upload section', () => {
 
     it('shows Upload MP3 button (disabled when no user)', () => {
         render(<LibraryPanel />);
-        const uploadBtn = screen.getByText(/Upload MP3/i).closest('button');
+        const uploadBtn = screen.getByRole('button', { name: /Upload MP3/i });
         expect(uploadBtn).toBeDisabled();
     });
 
@@ -227,7 +227,7 @@ describe('LibraryPanel — upload section', () => {
                 forEach: (cb) => cb({ id: 'up_1', data: () => ({ title: 'Track A', artistName: 'Artist', downloadUrl: 'https://cdn.example/a.mp3' }) }),
             });
         });
-        fireEvent.click(screen.getByText('Track A').closest('[title="Add to Workspace"]'));
+        fireEvent.click(screen.getByTitle('Add to Workspace'));
         await waitFor(() => expect(mockHandleAddTrack).toHaveBeenCalledTimes(1));
     });
 });
@@ -261,26 +261,24 @@ describe('LibraryPanel — Spotify section (connected)', () => {
 
     it('shows the search input when Spotify is connected', async () => {
         render(<LibraryPanel />);
-        await waitFor(() => expect(screen.getByPlaceholderText(/Search/i)).toBeInTheDocument());
+        expect(await screen.findByPlaceholderText(/Search/i)).toBeInTheDocument();
     });
 
     it('shows playlist names after getUserPlaylists resolves', async () => {
         render(<LibraryPanel />);
-        await waitFor(() => expect(screen.getByText('Playlist One')).toBeInTheDocument());
+        expect(await screen.findByText('Playlist One')).toBeInTheDocument();
         expect(screen.getByText('Playlist Two')).toBeInTheDocument();
     });
 
     it('clicking a playlist opens the PlaylistModal', async () => {
         render(<LibraryPanel />);
-        await waitFor(() => screen.getByText('Playlist One'));
-        fireEvent.click(screen.getByText('Playlist One'));
+        fireEvent.click(await screen.findByText('Playlist One'));
         expect(screen.getByTestId('playlist-modal')).toBeInTheDocument();
     });
 
     it('closing PlaylistModal hides it', async () => {
         render(<LibraryPanel />);
-        await waitFor(() => screen.getByText('Playlist One'));
-        fireEvent.click(screen.getByText('Playlist One'));
+        fireEvent.click(await screen.findByText('Playlist One'));
         fireEvent.click(screen.getByText('Close'));
         expect(screen.queryByTestId('playlist-modal')).not.toBeInTheDocument();
     });
@@ -288,7 +286,7 @@ describe('LibraryPanel — Spotify section (connected)', () => {
     it('shows an error message when getUserPlaylists throws', async () => {
         mockGetUserPlaylists.mockRejectedValue(new Error('Network failure'));
         render(<LibraryPanel />);
-        await waitFor(() => expect(screen.getByText('Network failure')).toBeInTheDocument());
+        expect(await screen.findByText('Network failure')).toBeInTheDocument();
     });
 });
 
@@ -307,8 +305,11 @@ describe('LibraryPanel — upload tip dismiss', () => {
         await act(async () => { capturedAuthCb(mockUser); });
         await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
 
+        // eslint-disable-next-line testing-library/no-node-access
         const tipText = screen.getByText(/Name your file as the song title/i);
+        // eslint-disable-next-line testing-library/no-node-access
         const tipContainer = tipText.closest('div');
+        // eslint-disable-next-line testing-library/no-node-access
         const dismissBtn = tipContainer.querySelector('button');
         fireEvent.click(dismissBtn);
 
@@ -342,9 +343,9 @@ describe('LibraryPanel — delete upload', () => {
         });
 
         const deleteBtn = screen.getByTitle('Delete file');
-        await act(async () => { fireEvent.click(deleteBtn); });
+        fireEvent.click(deleteBtn);
+        await waitFor(() => expect(deleteObject).toHaveBeenCalled());
 
-        expect(deleteObject).toHaveBeenCalled();
         expect(deleteDoc).toHaveBeenCalled();
     });
 
@@ -359,7 +360,7 @@ describe('LibraryPanel — delete upload', () => {
         });
 
         const deleteBtn = screen.getByTitle('Delete file');
-        await act(async () => { fireEvent.click(deleteBtn); });
+        fireEvent.click(deleteBtn);
 
         expect(mockHandleAddTrack).not.toHaveBeenCalled();
     });
@@ -377,10 +378,11 @@ describe('LibraryPanel — file upload', () => {
     afterEach(() => { delete global.fetch; });
 
     const triggerFileUpload = async (filename = 'track.mp3') => {
+        // eslint-disable-next-line testing-library/no-node-access
         const fileInput = document.querySelector('input[type="file"]');
         const file = new File(['audio'], filename, { type: 'audio/mpeg' });
         Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
-        await act(async () => { fireEvent.change(fileInput); });
+        fireEvent.change(fileInput);
     };
 
     it('shows "Uploading..." while the upload is in progress', async () => {
@@ -406,8 +408,8 @@ describe('LibraryPanel — file upload', () => {
         await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
 
         await triggerFileUpload('my-song.mp3');
+        await waitFor(() => expect(uploadBytes).toHaveBeenCalled());
 
-        expect(uploadBytes).toHaveBeenCalled();
         expect(ref).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('my-song.mp3'));
     });
 
@@ -431,8 +433,8 @@ describe('LibraryPanel — Spotify search results', () => {
     });
 
     const typeQuery = async (text) => {
-        await waitFor(() => screen.getByPlaceholderText(/Search Library.../i));
-        fireEvent.change(screen.getByPlaceholderText(/Search Library.../i), {
+        const input = await screen.findByPlaceholderText(/Search Library.../i);
+        fireEvent.change(input, {
             target: { value: text },
         });
     };
@@ -445,7 +447,7 @@ describe('LibraryPanel — Spotify search results', () => {
         });
         render(<LibraryPanel />);
         await typeQuery('Found Track');
-        await waitFor(() => expect(screen.getByText('Found Track')).toBeInTheDocument(), { timeout: 1500 });
+        expect(await screen.findByText('Found Track', {}, { timeout: 1500 })).toBeInTheDocument();
         expect(screen.getByText('DJ Test')).toBeInTheDocument();
     });
 
@@ -453,14 +455,14 @@ describe('LibraryPanel — Spotify search results', () => {
         mockSearchSpotify.mockResolvedValue({ tracks: { items: [] } });
         render(<LibraryPanel />);
         await typeQuery('xyznothing999');
-        await waitFor(() => expect(screen.getByText(/No tracks found/i)).toBeInTheDocument(), { timeout: 1500 });
+        expect(await screen.findByText(/No tracks found/i, {}, { timeout: 1500 })).toBeInTheDocument();
     });
 
     it('shows an error message when searchSpotify rejects', async () => {
         mockSearchSpotify.mockRejectedValue(new Error('Search failed'));
         render(<LibraryPanel />);
         await typeQuery('error query');
-        await waitFor(() => expect(screen.getByText('Search failed')).toBeInTheDocument(), { timeout: 1500 });
+        expect(await screen.findByText('Search failed', {}, { timeout: 1500 })).toBeInTheDocument();
     });
 
     it('clears results when the search input is cleared via X button', async () => {
@@ -471,7 +473,7 @@ describe('LibraryPanel — Spotify search results', () => {
         });
         render(<LibraryPanel />);
         await typeQuery('Found Track');
-        await waitFor(() => screen.getByText('Found Track'), { timeout: 1500 });
+        await screen.findByText('Found Track', {}, { timeout: 1500 });
 
         // The X clear button appears when there is a search query
         const clearBtn = screen.getByRole('button', { name: '' });

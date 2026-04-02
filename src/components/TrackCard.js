@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, EyeOff, Move, Copy, Trash2, RotateCcw, ZoomIn, AlertTriangle, X, Plus, Power } from 'lucide-react';
+import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, EyeOff, Move, Copy, Trash2, RotateCcw, AlertTriangle, X, Plus, Power } from 'lucide-react';
 import { Slider } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
 import { useAudioEngine } from '../audio/useAudioEngine';
@@ -125,6 +125,9 @@ const makeDefaultSegment = (id, startPct = 0, endPct = 1) => ({
     effects: [],
 });
 
+// Key names for pitch transposition (chromatic)
+const CHROMATIC_KEYS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
 export default function TrackCard({
     trackId,
     initiallyExpanded = false,
@@ -154,7 +157,7 @@ export default function TrackCard({
     isMissing = false,
 }) {
     const { settings } = useSettings();
-    const { tracks, handleUpdateTrack, handleAddTrack, handleClearAllTracks, handleUpdateTrackDuration, universalIsPlaying, masterStopSignal, globalZoom, masterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleOverwriteTracks } = useMix();
+    const { tracks, handleUpdateTrack, handleAddTrack, universalIsPlaying, masterStopSignal, globalZoom, masterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleOverwriteTracks } = useMix();
     const {
         play, pause, seek, setVolume: setEngVolume, setPitch: setEngPitch, setSpeed: setEngSpeed,
         setEQ, addEffect, removeEffect, setEffectParam, applyFadeIn, applyFadeOut
@@ -178,7 +181,7 @@ export default function TrackCard({
     const [fadeIn, setFadeIn] = useState(() => parseFade(initialFadeIn));
     const [fadeOut, setFadeOut] = useState(() => parseFade(initialFadeOut));
     const [audioDuration, setAudioDuration] = useState(0);
-    const [displayTimeSec, setDisplayTimeSec] = useState(0);
+    const [, setDisplayTimeSec] = useState(0);
     const [containerWidth, setContainerWidth] = useState(0);
     // Derived synchronously — no state lag when zoom changes.
     // zoom > 0: WaveSurfer pxPerSec = zoom * 2, so total canvas width = zoom * 2 * duration.
@@ -207,7 +210,6 @@ export default function TrackCard({
     const fadeOutTriggeredRef = useRef(false);
     const beatPositionsRef = useRef(beatPositions);
     const adjustedBeatPositionsRef = useRef(null);
-    const overlayContainerRef = useRef(null);
     const scrollContainerRef = useRef(null);
     const isHoveredRef = useRef(false);
     const lastTimestampUpdateRef = useRef(0);
@@ -527,9 +529,6 @@ export default function TrackCard({
     const setFadeInWithSync    = useCallback((v) => { setFadeIn(v);  syncActiveSegmentSettings({ fadeIn: v }); },  [syncActiveSegmentSettings]);
     const setFadeOutWithSync   = useCallback((v) => { setFadeOut(v); syncActiveSegmentSettings({ fadeOut: v }); }, [syncActiveSegmentSettings]);
 
-    // Key names for pitch transposition (chromatic)
-    const CHROMATIC_KEYS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-
     const setPitchWithSync = useCallback((v) => {
         setPitch(v);
         syncActiveSegmentSettings({ pitch: v });
@@ -721,7 +720,7 @@ export default function TrackCard({
             handleUpdateTrack(trackId, { initialSegments: next });
             return next;
         });
-    }, [audioUrl]);
+    }, [audioUrl, handleUpdateTrack, trackId]);
 
     const handleOffsetDragStart = useCallback((e) => {
         e.preventDefault();
@@ -771,7 +770,7 @@ export default function TrackCard({
         
         document.addEventListener('mousemove', handleMouseMove);
         document.addEventListener('mouseup', handleMouseUp);
-    }, [masterDuration, offsetSec, trackId, tracks, handleOverwriteTracks]);
+    }, [masterDuration, offsetSec, trackId, tracks, handleOverwriteTracks, masterBpm]);
 
     const handleSegmentDragStart = useCallback((e, seg) => {
         e.stopPropagation();
@@ -883,7 +882,7 @@ export default function TrackCard({
         
         document.addEventListener('mousemove', handleMouseMove);
         document.addEventListener('mouseup', handleMouseUp);
-    }, [trackId, offsetSec, masterDuration, segments, trackName, artistName, albumArt, bpm, trackKey, beatPositions, volume, spotifyId, audioUrl, handleUpdateTrack]);
+    }, [trackId, masterDuration, masterBpm, segments, beatPositions, handleUpdateTrack]);
 
     // CTRL+S — split at playhead only for the card currently under the cursor.
     // Checking isHoveredRef prevents all expanded cards from splitting simultaneously.
@@ -1054,7 +1053,7 @@ export default function TrackCard({
         };
         if (isPlaying) updatePlayhead();
         return () => cancelAnimationFrame(frameId);
-    }, [isPlaying, trackId, applyFadeIn, applyFadeOut]);
+    }, [isPlaying, trackId, applyFadeIn, applyFadeOut, waveformPixelWidth]);
 
     return (
         <div className="relative">
@@ -1499,7 +1498,6 @@ export default function TrackCard({
                                                     e.stopPropagation();
                                                     const originalStart = seg.startPct;
                                                     const startX = e.clientX;
-                                                    const audioDur = durationRef.current || 1;
                                                     const parentWidth = waveformPixelWidth || 1;
                                                     
                                                     const handleMove = (ev) => {

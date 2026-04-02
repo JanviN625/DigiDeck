@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import AIPanel from '../components/AIPanel';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ const setupAndSend = async (tracks = [], message = 'test') => {
     useMix.mockReturnValue({ tracks });
 
     render(<AIPanel />);
-    await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+    await screen.findByPlaceholderText('Ask for track suggestions…');
     fireEvent.change(screen.getByPlaceholderText('Ask for track suggestions…'), {
         target: { value: message },
     });
@@ -120,9 +120,7 @@ describe('AIPanel — rendering', () => {
 
     it('renders the chat input', async () => {
         render(<AIPanel />);
-        await waitFor(() =>
-            expect(screen.getByPlaceholderText('Ask for track suggestions…')).toBeInTheDocument()
-        );
+        expect(await screen.findByPlaceholderText('Ask for track suggestions…')).toBeInTheDocument();
     });
 
     it('collapses panel when collapse button clicked', () => {
@@ -145,25 +143,19 @@ describe('AIPanel — rendering', () => {
 describe('AIPanel — welcome messages', () => {
     it('shows empty mix welcome when no tracks', async () => {
         render(<AIPanel />);
-        await waitFor(() =>
-            expect(screen.getByText(/No tracks yet/i)).toBeInTheDocument()
-        );
+        expect(await screen.findByText(/No tracks yet/i)).toBeInTheDocument();
     });
 
     it('shows track count for 1 track', async () => {
         setupMocks({ mix: { tracks: [{ audioUrl: 'a.mp3', title: 'T' }] } });
         render(<AIPanel />);
-        await waitFor(() =>
-            expect(screen.getByText(/has 1 track/i)).toBeInTheDocument()
-        );
+        expect(await screen.findByText(/has 1 track/i)).toBeInTheDocument();
     });
 
     it('shows plural for multiple tracks', async () => {
         setupMocks({ mix: { tracks: [{ audioUrl: 'a.mp3' }, { audioUrl: 'b.mp3' }] } });
         render(<AIPanel />);
-        await waitFor(() =>
-            expect(screen.getByText(/has 2 tracks/i)).toBeInTheDocument()
-        );
+        expect(await screen.findByText(/has 2 tracks/i)).toBeInTheDocument();
     });
 });
 
@@ -172,13 +164,13 @@ describe('AIPanel — welcome messages', () => {
 describe('AIPanel — input behaviour', () => {
     it('send button is disabled when input is empty', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         expect(screen.getByTitle('Send')).toBeDisabled();
     });
 
     it('send button enables when input has content', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         fireEvent.change(screen.getByPlaceholderText('Ask for track suggestions…'), {
             target: { value: 'Hi' },
         });
@@ -187,7 +179,7 @@ describe('AIPanel — input behaviour', () => {
 
     it('Enter key submits the message', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         const input = screen.getByPlaceholderText('Ask for track suggestions…');
         fireEvent.change(input, { target: { value: 'Hello' } });
         fireEvent.keyDown(input, { key: 'Enter' });
@@ -196,7 +188,7 @@ describe('AIPanel — input behaviour', () => {
 
     it('Shift+Enter does not submit', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         const input = screen.getByPlaceholderText('Ask for track suggestions…');
         fireEvent.change(input, { target: { value: 'Hello' } });
         fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
@@ -205,7 +197,7 @@ describe('AIPanel — input behaviour', () => {
 
     it('input clears after sending', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         const input = screen.getByPlaceholderText('Ask for track suggestions…');
         fireEvent.change(input, { target: { value: 'Hello' } });
         fireEvent.click(screen.getByTitle('Send'));
@@ -218,7 +210,7 @@ describe('AIPanel — input behaviour', () => {
 describe('AIPanel — message flow', () => {
     it('user message appears in chat after sending', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         fireEvent.change(screen.getByPlaceholderText('Ask for track suggestions…'), {
             target: { value: 'What tracks work together?' },
         });
@@ -229,7 +221,7 @@ describe('AIPanel — message flow', () => {
     it('AI response stored after fetch resolves', async () => {
         mockFetch('Here are my suggestions!');
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         fireEvent.change(screen.getByPlaceholderText('Ask for track suggestions…'), {
             target: { value: 'Suggest tracks' },
         });
@@ -246,35 +238,29 @@ describe('AIPanel — message flow', () => {
     it('error message shown when fetch fails', async () => {
         mockFetch('Server error', false);
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         fireEvent.change(screen.getByPlaceholderText('Ask for track suggestions…'), {
             target: { value: 'Hi' },
         });
         fireEvent.click(screen.getByTitle('Send'));
-        await waitFor(() =>
-            expect(screen.getByText(/something went wrong/i)).toBeInTheDocument()
-        );
+        expect(await screen.findByText(/something went wrong/i)).toBeInTheDocument();
     });
 
     it('auto-titles chat on first user message (>30 chars gets truncated)', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         const longMsg = 'A'.repeat(35);
         fireEvent.change(screen.getByPlaceholderText('Ask for track suggestions…'), {
             target: { value: longMsg },
         });
-        await act(async () => {
-            fireEvent.click(screen.getByTitle('Send'));
-        });
+        fireEvent.click(screen.getByTitle('Send'));
         fireEvent.click(screen.getByTitle('Chat History'));
-        await waitFor(() =>
-            expect(screen.getByText('A'.repeat(30) + '…')).toBeInTheDocument()
-        );
+        expect(await screen.findByText('A'.repeat(30) + '…')).toBeInTheDocument();
     });
 
     it('short message used as title without ellipsis', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         fireEvent.change(screen.getByPlaceholderText('Ask for track suggestions…'), {
             target: { value: 'Short' },
         });
@@ -292,16 +278,15 @@ describe('AIPanel — message flow', () => {
 describe('AIPanel — chat management', () => {
     it('opens chat history modal when history button clicked', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByTitle('Chat History'));
-        fireEvent.click(screen.getByTitle('Chat History'));
+        fireEvent.click(await screen.findByTitle('Chat History'));
         expect(screen.getByText('Chat History')).toBeInTheDocument();
     });
 
     it('closes modal when backdrop clicked', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByTitle('Chat History'));
-        fireEvent.click(screen.getByTitle('Chat History'));
+        fireEvent.click(await screen.findByTitle('Chat History'));
         // Click the backdrop (fixed inset overlay)
+        // eslint-disable-next-line testing-library/no-node-access
         fireEvent.click(screen.getByText('Chat History').closest('.fixed'));
         await waitFor(() =>
             // Modal h3 disappears after close
@@ -311,15 +296,12 @@ describe('AIPanel — chat management', () => {
 
     it('can create a new chat from the modal', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByTitle('Chat History'));
-        fireEvent.click(screen.getByTitle('Chat History'));
+        fireEvent.click(await screen.findByTitle('Chat History'));
         // There are two "New Chat" texts — button in modal footer
         const newChatBtn = screen.getAllByText(/New Chat/i).find(el => el.tagName === 'BUTTON');
         fireEvent.click(newChatBtn);
         // Welcome message for new chat should appear
-        await waitFor(() =>
-            expect(screen.getByText(/No tracks yet/i)).toBeInTheDocument()
-        );
+        expect(await screen.findByText(/No tracks yet/i)).toBeInTheDocument();
     });
 
     it('new chat button is disabled at MAX_CHATS (5)', async () => {
@@ -334,7 +316,7 @@ describe('AIPanel — chat management', () => {
 
         render(<AIPanel />);
         fireEvent.click(screen.getByTitle('Chat History'));
-        await waitFor(() => screen.getByText('Chat 1'));
+        await screen.findByText('Chat 1');
         // The footer New Chat button should be disabled
         const buttons = screen.getAllByRole('button').filter(b => b.textContent.includes('New Chat'));
         const footerBtn = buttons.find(b => b.disabled !== undefined);
@@ -351,7 +333,7 @@ describe('AIPanel — chat management', () => {
 
         render(<AIPanel />);
         fireEvent.click(screen.getByTitle('Chat History'));
-        await waitFor(() => screen.getByText('Alpha'));
+        await screen.findByText('Alpha');
         fireEvent.click(screen.getAllByTitle('Delete chat')[0]);
         await waitFor(() =>
             expect(screen.queryByText('Alpha')).not.toBeInTheDocument()
@@ -368,7 +350,7 @@ describe('AIPanel — chat management', () => {
 
         render(<AIPanel />);
         fireEvent.click(screen.getByTitle('Chat History'));
-        await waitFor(() => screen.getByText('Alpha'));
+        await screen.findByText('Alpha');
         fireEvent.click(screen.getAllByTitle('Delete chat')[0]); // delete Alpha
         await waitFor(() =>
             expect(screen.queryByText('Alpha')).not.toBeInTheDocument()
@@ -386,16 +368,14 @@ describe('AIPanel — chat management', () => {
 
         render(<AIPanel />);
         fireEvent.click(screen.getByTitle('Chat History'));
-        await waitFor(() => screen.getByText('Only'));
+        await screen.findByText('Only');
         fireEvent.click(screen.getAllByTitle('Delete chat')[0]);
-        await waitFor(() =>
-            expect(screen.getByText('No active chat.')).toBeInTheDocument()
-        );
+        expect(await screen.findByText('No active chat.')).toBeInTheDocument();
     });
 
     it('persists chats to localStorage', async () => {
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         const stored = JSON.parse(localStorage.getItem('digideck-ai-chats'));
         expect(Array.isArray(stored)).toBe(true);
         expect(stored.length).toBeGreaterThan(0);
@@ -426,7 +406,7 @@ describe('AIPanel — markdown rendering', () => {
     it('renders - bullet list as <ul>', () => {
         preloadChat([{ role: 'assistant', content: '- item one\n- item two' }]);
         render(<AIPanel />);
-        expect(document.querySelector('ul')).toBeInTheDocument();
+        expect(screen.getByRole('list')).toBeInTheDocument();
         expect(screen.getByText('item one')).toBeInTheDocument();
         expect(screen.getByText('item two')).toBeInTheDocument();
     });
@@ -434,7 +414,7 @@ describe('AIPanel — markdown rendering', () => {
     it('renders 1. numbered list as <ol>', () => {
         preloadChat([{ role: 'assistant', content: '1. first step\n2. second step' }]);
         render(<AIPanel />);
-        expect(document.querySelector('ol')).toBeInTheDocument();
+        expect(screen.getByRole('list')).toBeInTheDocument();
     });
 
     it('renders ## heading as a paragraph', () => {
@@ -814,7 +794,7 @@ describe('API call parameters', () => {
         useMix.mockReturnValue({ tracks: [] });
 
         render(<AIPanel />);
-        await waitFor(() => screen.getByPlaceholderText('Ask for track suggestions…'));
+        await screen.findByPlaceholderText('Ask for track suggestions…');
         fireEvent.change(screen.getByPlaceholderText('Ask for track suggestions…'), {
             target: { value: 'new message' },
         });

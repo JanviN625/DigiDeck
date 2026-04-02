@@ -1,6 +1,5 @@
 import FirebaseService, { useFirebaseAuth } from '../firebase/firebase';
 import {
-    onAuthStateChanged,
     signInWithPopup,
     signInWithEmailAndPassword,
     createUserWithEmailAndPassword,
@@ -8,8 +7,7 @@ import {
     updateProfile,
     updateEmail,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, getDocs, collection, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { doc, getDoc, setDoc, getDocs, collection, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase/firebaseConfig';
 import { renderHook, act } from '@testing-library/react';
 

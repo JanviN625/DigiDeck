@@ -175,12 +175,14 @@ describe('AccountModal — open/close', () => {
     it('calls onClose when the backdrop is clicked', () => {
         const { container } = render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         // container.firstChild is the outermost backdrop div (has onClick={onClose})
+        // eslint-disable-next-line testing-library/no-node-access
         fireEvent.click(container.firstChild);
         expect(mockOnClose).toHaveBeenCalledTimes(1);
     });
 
     it('calls onClose when the X button is clicked', () => {
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
+        // eslint-disable-next-line testing-library/no-node-access
         fireEvent.click(screen.getByTestId('icon-x').closest('button'));
         expect(mockOnClose).toHaveBeenCalledTimes(1);
     });
@@ -224,21 +226,21 @@ describe('AccountModal — display name', () => {
         mockUpdateDisplayName.mockResolvedValueOnce();
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         fireEvent.click(saveBtn(0));
-        await waitFor(() => expect(screen.getByText('Name updated.')).toBeInTheDocument());
+        expect(await screen.findByText('Name updated.')).toBeInTheDocument();
     });
 
     it('shows a friendly error when updateDisplayName rejects', async () => {
         mockUpdateDisplayName.mockRejectedValueOnce(new Error('Network error'));
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         fireEvent.click(saveBtn(0));
-        await waitFor(() => expect(screen.getByText('Network error')).toBeInTheDocument());
+        expect(await screen.findByText('Network error')).toBeInTheDocument();
     });
 
     it('falls back to "Update failed." when the error has no message', async () => {
         mockUpdateDisplayName.mockRejectedValueOnce({});
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         fireEvent.click(saveBtn(0));
-        await waitFor(() => expect(screen.getByText('Update failed.')).toBeInTheDocument());
+        expect(await screen.findByText('Update failed.')).toBeInTheDocument();
     });
 });
 
@@ -273,14 +275,14 @@ describe('AccountModal — email (email/password user)', () => {
         mockUpdateUserEmail.mockResolvedValueOnce();
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         fireEvent.click(saveBtn(1));
-        await waitFor(() => expect(screen.getByText('Email updated.')).toBeInTheDocument());
+        expect(await screen.findByText('Email updated.')).toBeInTheDocument();
     });
 
     it('shows a friendly error when updateUserEmail rejects', async () => {
         mockUpdateUserEmail.mockRejectedValueOnce(new Error('requires-recent-login'));
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         fireEvent.click(saveBtn(1));
-        await waitFor(() => expect(screen.getByText('requires-recent-login')).toBeInTheDocument());
+        expect(await screen.findByText('requires-recent-login')).toBeInTheDocument();
     });
 });
 
@@ -341,7 +343,7 @@ describe('AccountModal — profile photo', () => {
         setupMocks({ auth: { user: { ...defaultUser, photoURL: 'https://photo.example/avatar.jpg' } } });
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         fireEvent.click(screen.getByText('Remove photo'));
-        await waitFor(() => expect(screen.getByText('Storage error')).toBeInTheDocument());
+        expect(await screen.findByText('Storage error')).toBeInTheDocument();
     });
 
     it('renders an avatar image when user has a photoURL', () => {
@@ -359,14 +361,16 @@ describe('AccountModal — profile photo', () => {
     it('shows an error when photo upload fails', async () => {
         mockUpdateProfilePhoto.mockRejectedValueOnce(new Error('Image too large'));
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
+        // eslint-disable-next-line testing-library/no-node-access
         const fileInput = document.querySelector('input[type="file"]');
         const file = new File(['img'], 'avatar.png', { type: 'image/png' });
         fireEvent.change(fileInput, { target: { files: [file] } });
-        await waitFor(() => expect(screen.getByText('Image too large')).toBeInTheDocument());
+        expect(await screen.findByText('Image too large')).toBeInTheDocument();
     });
 
     it('does nothing when the file input is changed with no file selected', async () => {
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
+        // eslint-disable-next-line testing-library/no-node-access
         const fileInput = document.querySelector('input[type="file"]');
         fireEvent.change(fileInput, { target: { files: [] } });
         expect(mockUpdateProfilePhoto).not.toHaveBeenCalled();
@@ -388,7 +392,7 @@ describe('AccountModal — account details', () => {
 
     it('shows "Email / Password" sign-in method for email/password users', async () => {
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        await waitFor(() => expect(screen.getByText('Email / Password')).toBeInTheDocument());
+        expect(await screen.findByText('Email / Password')).toBeInTheDocument();
     });
 
     it('shows "Google" sign-in method for Google users', async () => {
@@ -396,7 +400,7 @@ describe('AccountModal — account details', () => {
         const { getDoc } = require('firebase/firestore');
         getDoc.mockResolvedValue(firestoreSnap({}));
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        await waitFor(() => expect(screen.getByText('Google')).toBeInTheDocument());
+        expect(await screen.findByText('Google')).toBeInTheDocument();
     });
 
     it('shows the account created date from Firestore', async () => {
@@ -405,13 +409,13 @@ describe('AccountModal — account details', () => {
             createdAt: { toDate: () => new Date('2024-01-15T12:00:00Z') },
         }));
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        await waitFor(() => expect(screen.getByText('January 15, 2024')).toBeInTheDocument());
+        expect(await screen.findByText('January 15, 2024')).toBeInTheDocument();
     });
 
     it('shows the Auth metadata creation date when Firestore has no createdAt', async () => {
         // user.metadata.creationTime = 'Mon, 15 Jan 2024 00:00:00 GMT'
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        await waitFor(() => expect(screen.getByText('January 15, 2024')).toBeInTheDocument());
+        expect(await screen.findByText('January 15, 2024')).toBeInTheDocument();
     });
 
     it('shows "—" when neither Firestore nor Auth metadata provides a date', async () => {
@@ -419,7 +423,7 @@ describe('AccountModal — account details', () => {
         const { getDoc } = require('firebase/firestore');
         getDoc.mockResolvedValue(firestoreSnap({}));
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        await waitFor(() => expect(screen.getByText('—')).toBeInTheDocument());
+        expect(await screen.findByText('—')).toBeInTheDocument();
     });
 
     it('handles a Firestore fetch failure without crashing', async () => {
@@ -427,12 +431,12 @@ describe('AccountModal — account details', () => {
         getDoc.mockRejectedValue(new Error('Firestore unavailable'));
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         // Falls back to Auth metadata date; component should not throw
-        await waitFor(() => expect(screen.getByText('January 15, 2024')).toBeInTheDocument());
+        expect(await screen.findByText('January 15, 2024')).toBeInTheDocument();
     });
 
     it('shows "Not connected" when Spotify is disconnected', async () => {
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        await waitFor(() => expect(screen.getByText('Not connected')).toBeInTheDocument());
+        expect(await screen.findByText('Not connected')).toBeInTheDocument();
     });
 
     it('shows "Connected" when Spotify is connected', async () => {
@@ -440,12 +444,12 @@ describe('AccountModal — account details', () => {
         const { getDoc } = require('firebase/firestore');
         getDoc.mockResolvedValue(firestoreSnap({}));
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        await waitFor(() => expect(screen.getByText('Connected')).toBeInTheDocument());
+        expect(await screen.findByText('Connected')).toBeInTheDocument();
     });
 
     it('renders a "Connect" button when Spotify is disconnected', async () => {
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        await waitFor(() => expect(screen.getByText('Connect')).toBeInTheDocument());
+        expect(await screen.findByText('Connect')).toBeInTheDocument();
     });
 
     it('renders a "Disconnect" button when Spotify is connected', async () => {
@@ -453,13 +457,12 @@ describe('AccountModal — account details', () => {
         const { getDoc } = require('firebase/firestore');
         getDoc.mockResolvedValue(firestoreSnap({}));
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        await waitFor(() => expect(screen.getByText('Disconnect')).toBeInTheDocument());
+        expect(await screen.findByText('Disconnect')).toBeInTheDocument();
     });
 
     it('calls connectSpotify when "Connect" is clicked', async () => {
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        await waitFor(() => screen.getByText('Connect'));
-        fireEvent.click(screen.getByText('Connect'));
+        fireEvent.click(await screen.findByText('Connect'));
         expect(mockConnectSpotify).toHaveBeenCalledTimes(1);
     });
 
@@ -468,8 +471,7 @@ describe('AccountModal — account details', () => {
         const { getDoc } = require('firebase/firestore');
         getDoc.mockResolvedValue(firestoreSnap({}));
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        await waitFor(() => screen.getByText('Disconnect'));
-        fireEvent.click(screen.getByText('Disconnect'));
+        fireEvent.click(await screen.findByText('Disconnect'));
         expect(mockDisconnectSpotify).toHaveBeenCalledTimes(1);
     });
 });
@@ -480,6 +482,7 @@ describe('AccountModal — animation class', () => {
     it('applies animation class when animationsEnabled is true', () => {
         setupMocks({ settings: { animationsEnabled: true } });
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
+        // eslint-disable-next-line testing-library/no-node-access
         const modalPanel = screen.getByText('Account Info').closest('[class*="bg-base-900"]');
         expect(modalPanel.className).toMatch(/animate-in/);
     });
@@ -487,6 +490,7 @@ describe('AccountModal — animation class', () => {
     it('does not apply animation class when animationsEnabled is false', () => {
         setupMocks({ settings: { animationsEnabled: false } });
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
+        // eslint-disable-next-line testing-library/no-node-access
         const modalPanel = screen.getByText('Account Info').closest('[class*="bg-base-900"]');
         expect(modalPanel.className).not.toMatch(/animate-in/);
     });
@@ -534,12 +538,14 @@ describe('SettingsModal — open/close', () => {
 
     it('calls onClose when the backdrop is clicked', () => {
         const { container } = render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
+        // eslint-disable-next-line testing-library/no-node-access
         fireEvent.click(container.firstChild);
         expect(mockOnClose).toHaveBeenCalledTimes(1);
     });
 
     it('calls onClose when the X button is clicked', () => {
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
+        // eslint-disable-next-line testing-library/no-node-access
         fireEvent.click(screen.getByTestId('icon-x').closest('button'));
         expect(mockOnClose).toHaveBeenCalledTimes(1);
     });
@@ -629,18 +635,21 @@ describe('SettingsModal — General tab', () => {
 // ─── SettingsModal — Controls tab ─────────────────────────────────────────────
 
 describe('SettingsModal — Controls tab', () => {
-    beforeEach(() => {
+    const renderControlsTab = () => {
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
         fireEvent.click(screen.getByText('Controls'));
-    });
+    };
 
     it('shows both action labels', () => {
+        renderControlsTab();
         expect(screen.getByText('Split track at playhead')).toBeInTheDocument();
         expect(screen.getByText('Play / Pause')).toBeInTheDocument();
     });
 
     it('renders the current keybind as kbd chips (Ctrl + S for splitAtPlayhead)', () => {
+        renderControlsTab();
         // formatKeybind({ key:'s', ctrl:true, ... }) → "Ctrl + S" → chips: "Ctrl", "S"
+        // eslint-disable-next-line testing-library/no-node-access
         const kbds = document.querySelectorAll('kbd');
         expect(kbds.length).toBeGreaterThan(0);
         const allText = Array.from(kbds).map(k => k.textContent);
@@ -649,17 +658,20 @@ describe('SettingsModal — Controls tab', () => {
     });
 
     it('shows Edit buttons for each action', () => {
+        renderControlsTab();
         const editBtns = screen.getAllByText('Edit');
         expect(editBtns).toHaveLength(2);
     });
 
     it('clicking Edit enters recording mode ("Press any key...")', () => {
+        renderControlsTab();
         const [firstEdit] = screen.getAllByText('Edit');
         fireEvent.click(firstEdit);
         expect(screen.getByText('Press any key...')).toBeInTheDocument();
     });
 
     it('clicking Cancel exits recording mode', () => {
+        renderControlsTab();
         const [firstEdit] = screen.getAllByText('Edit');
         fireEvent.click(firstEdit);
         fireEvent.click(screen.getByText('Cancel'));
@@ -667,6 +679,7 @@ describe('SettingsModal — Controls tab', () => {
     });
 
     it('pressing Escape cancels recording without saving', async () => {
+        renderControlsTab();
         const [firstEdit] = screen.getAllByText('Edit');
         fireEvent.click(firstEdit);
         await act(async () => {
@@ -677,6 +690,7 @@ describe('SettingsModal — Controls tab', () => {
     });
 
     it('modifier-only keys (Control, Shift, Alt) are ignored during recording', async () => {
+        renderControlsTab();
         const [firstEdit] = screen.getAllByText('Edit');
         fireEvent.click(firstEdit);
         await act(async () => {
@@ -688,6 +702,7 @@ describe('SettingsModal — Controls tab', () => {
     });
 
     it('Tab key is ignored during recording', async () => {
+        renderControlsTab();
         const [firstEdit] = screen.getAllByText('Edit');
         fireEvent.click(firstEdit);
         await act(async () => {
@@ -698,6 +713,7 @@ describe('SettingsModal — Controls tab', () => {
     });
 
     it('pressing a valid key saves the new keybind via updateSetting', async () => {
+        renderControlsTab();
         const [firstEdit] = screen.getAllByText('Edit');
         fireEvent.click(firstEdit); // recording splitAtPlayhead
         await act(async () => {
@@ -711,6 +727,7 @@ describe('SettingsModal — Controls tab', () => {
     });
 
     it('exits recording mode after a valid key is pressed', async () => {
+        renderControlsTab();
         const [firstEdit] = screen.getAllByText('Edit');
         fireEvent.click(firstEdit);
         await act(async () => {
@@ -722,6 +739,7 @@ describe('SettingsModal — Controls tab', () => {
     });
 
     it('a conflicting keybind shows an error and does not save', async () => {
+        renderControlsTab();
         // splitAtPlayhead edit → press Space (already assigned to playPause)
         const [firstEdit] = screen.getAllByText('Edit');
         fireEvent.click(firstEdit);
@@ -735,6 +753,7 @@ describe('SettingsModal — Controls tab', () => {
     });
 
     it('pressing the same key for the same action is not a conflict', async () => {
+        renderControlsTab();
         // playPause edit → press Space (same action, should be allowed)
         const editBtns = screen.getAllByText('Edit');
         fireEvent.click(editBtns[1]); // second Edit is playPause
@@ -749,6 +768,7 @@ describe('SettingsModal — Controls tab', () => {
     });
 
     it('key with modifiers (Ctrl+G) is saved correctly', async () => {
+        renderControlsTab();
         const [firstEdit] = screen.getAllByText('Edit');
         fireEvent.click(firstEdit);
         await act(async () => {
@@ -765,24 +785,28 @@ describe('SettingsModal — Controls tab', () => {
 // ─── SettingsModal — About tab ────────────────────────────────────────────────
 
 describe('SettingsModal — About tab', () => {
-    beforeEach(() => {
+    const renderAboutTab = () => {
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
         fireEvent.click(screen.getByText('About'));
-    });
+    };
 
     it('shows "DigiDeck Studio"', () => {
+        renderAboutTab();
         expect(screen.getByText('DigiDeck Studio')).toBeInTheDocument();
     });
 
     it('shows a version number', () => {
+        renderAboutTab();
         expect(screen.getByText(/Version \d+\.\d+\.\d+/)).toBeInTheDocument();
     });
 
     it('shows the app description', () => {
+        renderAboutTab();
         expect(screen.getByText(/browser-based audio mixing/i)).toBeInTheDocument();
     });
 
     it('renders the app logo image', () => {
+        renderAboutTab();
         const logo = screen.getByAltText('DigiDeck Logo');
         expect(logo).toBeInTheDocument();
         expect(logo).toHaveAttribute('src', '/icon.png');
@@ -795,6 +819,7 @@ describe('SettingsModal — animation class', () => {
     it('applies animation class when animationsEnabled is true', () => {
         setupMocks({ settings: { animationsEnabled: true } });
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
+        // eslint-disable-next-line testing-library/no-node-access
         const modalPanel = screen.getByText('Settings').closest('[class*="bg-base-900"]');
         expect(modalPanel.className).toMatch(/animate-in/);
     });
@@ -802,6 +827,7 @@ describe('SettingsModal — animation class', () => {
     it('does not apply animation class when animationsEnabled is false', () => {
         setupMocks({ settings: { animationsEnabled: false } });
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
+        // eslint-disable-next-line testing-library/no-node-access
         const modalPanel = screen.getByText('Settings').closest('[class*="bg-base-900"]');
         expect(modalPanel.className).not.toMatch(/animate-in/);
     });
@@ -828,7 +854,7 @@ describe('PlaylistModal — closed', () => {
         const { rerender } = render(
             <PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />
         );
-        await waitFor(() => screen.getByText('Song One'));
+        await screen.findByText('Song One');
 
         rerender(<PlaylistModal isOpen={false} onClose={jest.fn()} playlist={mockPlaylist} />);
         // After re-opening the next render call will re-fetch
@@ -867,31 +893,31 @@ describe('PlaylistModal — open header', () => {
 describe('PlaylistModal — track list', () => {
     it('calls getPlaylistTracks with the playlist id on open', async () => {
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />);
-        await waitFor(() => expect(mockGetPlaylistTracks).toHaveBeenCalledWith('playlist_1', 50, 0));
+        await waitFor(() => expect(mockGetPlaylistTracks).toHaveBeenCalledWith('playlist_1', 50, 0)); // waitFor on mock, not DOM query
     });
 
     it('renders track names after a successful fetch', async () => {
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />);
-        await waitFor(() => expect(screen.getByText('Song One')).toBeInTheDocument());
+        expect(await screen.findByText('Song One')).toBeInTheDocument();
         expect(screen.getByText('Song Two')).toBeInTheDocument();
     });
 
     it('renders artist and album info for each track', async () => {
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />);
-        await waitFor(() => screen.getByText('Song One'));
+        await screen.findByText('Song One');
         expect(screen.getByText(/Artist A/)).toBeInTheDocument();
     });
 
     it('shows "No Tracks Found" when fetch returns an empty list', async () => {
         mockGetPlaylistTracks.mockResolvedValue({ items: [] });
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />);
-        await waitFor(() => expect(screen.getByText('No Tracks Found')).toBeInTheDocument());
+        expect(await screen.findByText('No Tracks Found')).toBeInTheDocument();
     });
 
     it('shows "No Tracks Found" when fetch returns no items property', async () => {
         mockGetPlaylistTracks.mockResolvedValue({});
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />);
-        await waitFor(() => expect(screen.getByText('No Tracks Found')).toBeInTheDocument());
+        expect(await screen.findByText('No Tracks Found')).toBeInTheDocument();
     });
 
     it('filters out local tracks from the rendered list', async () => {
@@ -901,14 +927,14 @@ describe('PlaylistModal — track list', () => {
         };
         mockGetPlaylistTracks.mockResolvedValue({ items: [...mockTrackItems, localItem] });
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />);
-        await waitFor(() => screen.getByText('Song One'));
+        await screen.findByText('Song One');
         expect(screen.queryByText('Local Track')).not.toBeInTheDocument();
     });
 
     it('shows an error message when the fetch rejects', async () => {
         mockGetPlaylistTracks.mockRejectedValue(new Error('Network timeout'));
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />);
-        await waitFor(() => expect(screen.getByText('Failed to Load Tracks')).toBeInTheDocument());
+        expect(await screen.findByText('Failed to Load Tracks')).toBeInTheDocument();
         expect(screen.getByText('Network timeout')).toBeInTheDocument();
     });
 });
@@ -919,7 +945,7 @@ describe('PlaylistModal — close button', () => {
     it('calls onClose when the X button is clicked', async () => {
         const onClose = jest.fn();
         render(<PlaylistModal isOpen={true} onClose={onClose} playlist={mockPlaylist} />);
-        await waitFor(() => screen.getByText('Song One'));
+        await screen.findByText('Song One');
         fireEvent.click(screen.getByTitle('Close Modal'));
         expect(onClose).toHaveBeenCalledTimes(1);
     });

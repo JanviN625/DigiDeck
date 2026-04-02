@@ -645,8 +645,9 @@ describe('AudioEngine', () => {
 
     describe('renderOffline', () => {
         it('returns null when no tracks are loaded', async () => {
-            const result = await AudioEngine.renderOffline();
-            expect(result).toBeNull();
+            // eslint-disable-next-line testing-library/render-result-naming-convention
+            const buffer = await AudioEngine.renderOffline();
+            expect(buffer).toBeNull();
         });
 
         it('creates an OfflineAudioContext and calls startRendering', async () => {
@@ -657,9 +658,10 @@ describe('AudioEngine', () => {
 
         it('returns the rendered AudioBuffer', async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
-            const result = await AudioEngine.renderOffline();
-            expect(result).toBeDefined();
-            expect(result.sampleRate).toBe(44100);
+            // eslint-disable-next-line testing-library/render-result-naming-convention
+            const buffer = await AudioEngine.renderOffline();
+            expect(buffer).toBeDefined();
+            expect(buffer.sampleRate).toBe(44100);
         });
 
         it('skips tracks with targetVolume of 0', async () => {

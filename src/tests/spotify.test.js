@@ -58,6 +58,7 @@ jest.mock('firebase/firestore', () => ({
 
 jest.mock('firebase/auth', () => ({
     updateProfile: jest.fn(),
+    signInWithCustomToken: jest.fn().mockResolvedValue({}),
 }));
 
 // ─── Shared fixtures ──────────────────────────────────────────────────────────
@@ -605,7 +606,8 @@ describe('spotifyAuth — handleCallback', () => {
         // Token exchange then profile fetch
         fetch
             .mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 }) })
-            .mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'spotify_uid_123' }) });
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'spotify_uid_123' }) })
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ firebaseToken: 'mock_firebase_token' }) });
 
         const result = await handleCallback();
 

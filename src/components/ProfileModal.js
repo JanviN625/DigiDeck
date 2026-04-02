@@ -3,7 +3,7 @@ import { X, User, Camera, CheckCircle, AlertCircle, Loader } from 'lucide-react'
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase/firebaseConfig';
 import { useFirebaseAuth, friendlyError } from '../firebase/firebase';
-import { useSettings, formatKeybind, DEFAULT_SETTINGS } from '../utils/useSettings';
+import { useSettings, formatKeybind } from '../utils/useSettings';
 import { useSpotifyConnect } from '../spotify/appContext';
 
 // ─── AccountModal ─────────────────────────────────────────────────────────────
@@ -299,7 +299,7 @@ const ACTIONS = [
 ];
 
 export function SettingsModal({ isOpen, onClose }) {
-  const { settings, updateSetting, resetSettings } = useSettings();
+  const { settings, updateSetting } = useSettings();
   const animClass = settings.animationsEnabled ? 'animate-in fade-in zoom-in-95 duration-200' : '';
   const [activeTab, setActiveTab] = useState('general');
   const [recordingAction, setRecordingAction] = useState(null);

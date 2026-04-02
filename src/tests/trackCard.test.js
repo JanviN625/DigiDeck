@@ -186,6 +186,11 @@ beforeEach(() => {
     global.fetch = jest.fn().mockReturnValue(new Promise(() => {}));
     global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
     global.URL.revokeObjectURL = jest.fn();
+    global.ResizeObserver = class ResizeObserver {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+    };
 });
 
 // ─── Rendering ────────────────────────────────────────────────────────────────
@@ -355,6 +360,7 @@ describe('TrackCard — audio controls', () => {
 
     it('clicking play toggles to pause icon', () => {
         render(<TrackCard {...audioProps} />);
+        // eslint-disable-next-line testing-library/no-node-access
         const playBtn = screen.getByTestId('icon-play').closest('button');
         fireEvent.click(playBtn);
         expect(screen.getByTestId('icon-pause')).toBeInTheDocument();
@@ -362,8 +368,10 @@ describe('TrackCard — audio controls', () => {
 
     it('clicking play a second time returns to play icon', () => {
         render(<TrackCard {...audioProps} />);
+        // eslint-disable-next-line testing-library/no-node-access
         const playBtn = screen.getByTestId('icon-play').closest('button');
         fireEvent.click(playBtn);
+        // eslint-disable-next-line testing-library/no-node-access
         const pauseBtn = screen.getByTestId('icon-pause').closest('button');
         fireEvent.click(pauseBtn);
         expect(screen.getByTestId('icon-play')).toBeInTheDocument();
@@ -378,6 +386,7 @@ describe('TrackCard — audio controls', () => {
     it('clicking mute toggles to VolumeX icon', () => {
         render(<TrackCard {...audioProps} />);
         // First icon-volume2 is inside the mute button (volume slider icon comes after)
+        // eslint-disable-next-line testing-library/no-node-access
         const muteBtn = screen.getAllByTestId('icon-volume2')[0].closest('button');
         fireEvent.click(muteBtn);
         expect(screen.getByTestId('icon-volumex')).toBeInTheDocument();
@@ -390,6 +399,7 @@ describe('TrackCard — audio controls', () => {
 
     it('clicking visibility button toggles to EyeOff icon', () => {
         render(<TrackCard {...audioProps} />);
+        // eslint-disable-next-line testing-library/no-node-access
         const visBtn = screen.getByTestId('icon-eye').closest('button');
         fireEvent.click(visBtn);
         expect(screen.getByTestId('icon-eyeoff')).toBeInTheDocument();
@@ -402,12 +412,14 @@ describe('TrackCard — drag state', () => {
     it('applying isDragged prop adds opacity styling', () => {
         const { container } = render(<TrackCard {...defaultProps} isDragged={true} />);
         // The outer draggable div has class "opacity-50" when isDragged
+        // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
         const draggableDiv = container.querySelector('[draggable]');
         expect(draggableDiv.className).toMatch(/opacity-50/);
     });
 
     it('without isDragged the draggable div has no forced opacity', () => {
         const { container } = render(<TrackCard {...defaultProps} isDragged={false} />);
+        // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
         const draggableDiv = container.querySelector('[draggable]');
         // opacity-50 should NOT be in the class string
         expect(draggableDiv.className).not.toMatch(/opacity-50/);
@@ -479,6 +491,7 @@ describe('TrackCard — isMissing warning', () => {
 
     it('play button is disabled when isMissing is true', () => {
         render(<TrackCard {...defaultProps} audioUrl="blob:mock" isMissing={true} />);
+        // eslint-disable-next-line testing-library/no-node-access
         const playBtn = screen.getByTestId('icon-play').closest('button');
         expect(playBtn).toBeDisabled();
     });
@@ -510,6 +523,7 @@ describe('TrackCard — volume slider', () => {
     it('volume slider is disabled when track is hidden', () => {
         render(<TrackCard {...audioProps} />);
         // Click the visibility toggle to hide the track
+        // eslint-disable-next-line testing-library/no-node-access
         fireEvent.click(screen.getByTestId('icon-eye').closest('button'));
         const volumeSlider = screen.getAllByRole('slider').find(
             (s) => s.getAttribute('max') === '100' && !s.getAttribute('aria-label')
@@ -519,6 +533,7 @@ describe('TrackCard — volume slider', () => {
 
     it('muting calls setVolume with 0', () => {
         render(<TrackCard {...audioProps} initialVolume={80} />);
+        // eslint-disable-next-line testing-library/no-node-access
         const muteBtn = screen.getAllByTestId('icon-volume2')[0].closest('button');
         fireEvent.click(muteBtn);
         expect(mockSetVolume).toHaveBeenCalledWith(0);
@@ -561,7 +576,9 @@ describe('TrackCard — settings panel visibility', () => {
     it('Settings button is disabled when the track is hidden', () => {
         render(<TrackCard {...defaultProps} audioUrl="blob:mock" initiallyExpanded={true} />);
         // Hide the track
+        // eslint-disable-next-line testing-library/no-node-access
         fireEvent.click(screen.getByTestId('icon-eye').closest('button'));
+        // eslint-disable-next-line testing-library/no-node-access
         expect(screen.getByText('Settings').closest('button')).toBeDisabled();
     });
 });
@@ -569,38 +586,43 @@ describe('TrackCard — settings panel visibility', () => {
 // ─── Pitch controls ───────────────────────────────────────────────────────────
 
 describe('TrackCard — pitch controls', () => {
-    beforeEach(() => { renderWithSettings(); });
-
     it('shows pitch at 0st initially', () => {
+        renderWithSettings();
         expect(screen.getByText('0st')).toBeInTheDocument();
     });
 
     it('clicking + increments pitch by 1', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByRole('button', { name: '+' }));
         expect(screen.getByText('1st')).toBeInTheDocument();
     });
 
     it('clicking - decrements pitch by 1', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByRole('button', { name: '-' }));
         expect(screen.getByText('-1st')).toBeInTheDocument();
     });
 
     it('clicking + twice increments pitch to 2', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByRole('button', { name: '+' }));
         fireEvent.click(screen.getByRole('button', { name: '+' }));
         expect(screen.getByText('2st')).toBeInTheDocument();
     });
 
     it('pitch reset button is not shown when pitch is 0', () => {
+        renderWithSettings();
         expect(screen.queryByTitle('Reset to default')).not.toBeInTheDocument();
     });
 
     it('pitch reset button appears when pitch is non-zero', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByRole('button', { name: '+' }));
         expect(screen.getByTitle('Reset to default')).toBeInTheDocument();
     });
 
     it('clicking pitch reset returns pitch to 0', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByRole('button', { name: '+' }));
         fireEvent.click(screen.getByTitle('Reset to default'));
         expect(screen.getByText('0st')).toBeInTheDocument();
@@ -608,6 +630,7 @@ describe('TrackCard — pitch controls', () => {
     });
 
     it('incrementing pitch calls setEngPitch with the new value', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByRole('button', { name: '+' }));
         expect(mockSetPitch).toHaveBeenCalledWith(1);
     });
@@ -616,19 +639,18 @@ describe('TrackCard — pitch controls', () => {
 // ─── Speed controls ───────────────────────────────────────────────────────────
 
 describe('TrackCard — speed controls', () => {
-    beforeEach(() => { renderWithSettings(); });
-
     it('shows speed at 1.00x initially', () => {
+        renderWithSettings();
         expect(screen.getByText('1.00x')).toBeInTheDocument();
     });
 
     it('speed reset button is not shown when speed is 1.0', () => {
+        renderWithSettings();
         expect(screen.queryByTitle('Reset to 1.0x')).not.toBeInTheDocument();
     });
 
     it('changing the speed slider shows the new value', () => {
-        const speedSlider = screen.getByRole('slider', { hidden: true,
-            name: (n) => n === undefined || n === '' }).valueOf;
+        renderWithSettings();
         // Find the speed range input: min=0.25, max=2
         const speedInput = screen.getAllByRole('slider').find(
             (s) => s.getAttribute('min') === '0.25'
@@ -638,6 +660,7 @@ describe('TrackCard — speed controls', () => {
     });
 
     it('speed reset button appears when speed is not 1.0', () => {
+        renderWithSettings();
         const speedInput = screen.getAllByRole('slider').find(
             (s) => s.getAttribute('min') === '0.25'
         );
@@ -646,6 +669,7 @@ describe('TrackCard — speed controls', () => {
     });
 
     it('clicking speed reset returns speed to 1.0', () => {
+        renderWithSettings();
         const speedInput = screen.getAllByRole('slider').find(
             (s) => s.getAttribute('min') === '0.25'
         );
@@ -655,6 +679,7 @@ describe('TrackCard — speed controls', () => {
     });
 
     it('changing speed calls setEngSpeed with the new value', () => {
+        renderWithSettings();
         const speedInput = screen.getAllByRole('slider').find(
             (s) => s.getAttribute('min') === '0.25'
         );
@@ -663,11 +688,13 @@ describe('TrackCard — speed controls', () => {
     });
 
     it('clicking the speed value text enters inline edit mode', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByText('1.00x'));
         expect(screen.getByDisplayValue('1.00')).toBeInTheDocument();
     });
 
     it('pressing Escape in the speed inline input exits edit mode without saving', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByText('1.00x'));
         const input = screen.getByDisplayValue('1.00');
         fireEvent.keyDown(input, { key: 'Escape' });
@@ -679,19 +706,20 @@ describe('TrackCard — speed controls', () => {
 // ─── Quality warning ──────────────────────────────────────────────────────────
 
 describe('TrackCard — quality (G6) warning', () => {
-    beforeEach(() => { renderWithSettings(); });
-
     it('does not show quality warning at default pitch and speed', () => {
+        renderWithSettings();
         expect(screen.queryByText(/Audible artefacts/)).not.toBeInTheDocument();
     });
 
     it('shows warning when pitch exceeds 3 semitones', () => {
+        renderWithSettings();
         // Increment pitch 4 times (0→4)
         for (let i = 0; i < 4; i++) fireEvent.click(screen.getByRole('button', { name: '+' }));
         expect(screen.getByText(/Audible artefacts/)).toBeInTheDocument();
     });
 
     it('shows warning when speed exceeds 1.15', () => {
+        renderWithSettings();
         const speedInput = screen.getAllByRole('slider').find(
             (s) => s.getAttribute('min') === '0.25'
         );
@@ -700,6 +728,7 @@ describe('TrackCard — quality (G6) warning', () => {
     });
 
     it('shows warning when speed is below 0.85', () => {
+        renderWithSettings();
         const speedInput = screen.getAllByRole('slider').find(
             (s) => s.getAttribute('min') === '0.25'
         );
@@ -708,6 +737,7 @@ describe('TrackCard — quality (G6) warning', () => {
     });
 
     it('dismissing the warning hides it permanently for that card', () => {
+        renderWithSettings();
         for (let i = 0; i < 4; i++) fireEvent.click(screen.getByRole('button', { name: '+' }));
         fireEvent.click(screen.getByTitle('Dismiss warning'));
         expect(screen.queryByText(/Audible artefacts/)).not.toBeInTheDocument();
@@ -720,62 +750,71 @@ describe('TrackCard — quality (G6) warning', () => {
 // ─── EQ controls ─────────────────────────────────────────────────────────────
 
 describe('TrackCard — EQ controls', () => {
-    beforeEach(() => { renderWithSettings(); });
-
     it('renders EQ sliders for Lo, Mid, and Hi bands', () => {
+        renderWithSettings();
         expect(screen.getByRole('slider', { name: 'EQ Lo' })).toBeInTheDocument();
         expect(screen.getByRole('slider', { name: 'EQ Mid' })).toBeInTheDocument();
         expect(screen.getByRole('slider', { name: 'EQ Hi' })).toBeInTheDocument();
     });
 
     it('shows 0dB value for all bands by default', () => {
+        renderWithSettings();
         // Values rendered as "+0dB" or "0dB" — regex matches both
         const zeroBands = screen.getAllByText(/^[+]?0dB$/);
         expect(zeroBands.length).toBe(3);
     });
 
     it('EQ reset button is not shown when all bands are at 0', () => {
+        renderWithSettings();
         expect(screen.queryByTitle('Reset EQ')).not.toBeInTheDocument();
     });
 
     it('moving the Lo EQ slider calls setEQ with the updated low value', () => {
+        renderWithSettings();
         fireEvent.change(screen.getByRole('slider', { name: 'EQ Lo' }), { target: { value: '6' } });
         expect(mockSetEQ).toHaveBeenCalledWith(expect.objectContaining({ low: 6 }));
     });
 
     it('moving the Mid EQ slider calls setEQ with the updated mid value', () => {
+        renderWithSettings();
         fireEvent.change(screen.getByRole('slider', { name: 'EQ Mid' }), { target: { value: '-3' } });
         expect(mockSetEQ).toHaveBeenCalledWith(expect.objectContaining({ mid: -3 }));
     });
 
     it('moving the Hi EQ slider calls setEQ with the updated high value', () => {
+        renderWithSettings();
         fireEvent.change(screen.getByRole('slider', { name: 'EQ Hi' }), { target: { value: '3' } });
         expect(mockSetEQ).toHaveBeenCalledWith(expect.objectContaining({ high: 3 }));
     });
 
     it('EQ reset button appears when a band is non-zero', () => {
+        renderWithSettings();
         fireEvent.change(screen.getByRole('slider', { name: 'EQ Lo' }), { target: { value: '6' } });
         expect(screen.getByTitle('Reset EQ')).toBeInTheDocument();
     });
 
     it('clicking EQ reset calls setEQ with all bands at 0', () => {
+        renderWithSettings();
         fireEvent.change(screen.getByRole('slider', { name: 'EQ Lo' }), { target: { value: '6' } });
         fireEvent.click(screen.getByTitle('Reset EQ'));
         expect(mockSetEQ).toHaveBeenLastCalledWith({ low: 0, mid: 0, high: 0 });
     });
 
     it('clicking Kill Lo band button disables the Lo band', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByTitle('Kill Lo band'));
         // EQ should be called with low=-40 (kill)
         expect(mockSetEQ).toHaveBeenCalledWith(expect.objectContaining({ low: -40 }));
     });
 
     it('kill button label changes to "On" after kill is applied', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByTitle('Kill Lo band'));
         expect(screen.getByTitle('Restore Lo band')).toBeInTheDocument();
     });
 
     it('clicking the kill button again restores the band', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByTitle('Kill Lo band'));
         fireEvent.click(screen.getByTitle('Restore Lo band'));
         // Should restore to 0dB (kill released, slider value is still 0)
@@ -783,11 +822,13 @@ describe('TrackCard — EQ controls', () => {
     });
 
     it('EQ reset button appears when a band is killed', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByTitle('Kill Lo band'));
         expect(screen.getByTitle('Reset EQ')).toBeInTheDocument();
     });
 
     it('EQ reset clears all kills', () => {
+        renderWithSettings();
         fireEvent.click(screen.getByTitle('Kill Lo band'));
         fireEvent.click(screen.getByTitle('Reset EQ'));
         // All bands should be restored — low is back at 0, not -40
@@ -798,21 +839,25 @@ describe('TrackCard — EQ controls', () => {
 
 // ─── Audio effects ────────────────────────────────────────────────────────────
 
-describe('TrackCard — audio effects', () => {
-    beforeEach(() => {
-        jest.clearAllMocks();
-        setupMocks();
-        global.fetch = jest.fn().mockReturnValue(new Promise(() => {}));
-        global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
-        global.URL.revokeObjectURL = jest.fn();
-        renderWithSettings();
-    });
+// Helper: re-initialise mocks and render the settings panel (used by every
+// audio-effects test so that render() is not called inside beforeEach).
+const renderEffectsTab = () => {
+    jest.clearAllMocks();
+    setupMocks();
+    global.fetch = jest.fn().mockReturnValue(new Promise(() => {}));
+    global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
+    global.URL.revokeObjectURL = jest.fn();
+    renderWithSettings();
+};
 
+describe('TrackCard — audio effects', () => {
     it('shows "No effects added." when no effects are present', () => {
+        renderEffectsTab();
         expect(screen.getByText('No effects added.')).toBeInTheDocument();
     });
 
     it('clicking "Add Effect" opens the effect type menu', () => {
+        renderEffectsTab();
         fireEvent.click(screen.getByText('Add Effect'));
         expect(screen.getByText('Volume')).toBeInTheDocument();
         expect(screen.getByText('Pass Filter')).toBeInTheDocument();
@@ -823,6 +868,7 @@ describe('TrackCard — audio effects', () => {
     });
 
     it('selecting an effect type from the menu calls addEffect', () => {
+        renderEffectsTab();
         mockAddEffect.mockReturnValue(42);
         fireEvent.click(screen.getByText('Add Effect'));
         fireEvent.click(screen.getByText('Reverb'));
@@ -830,6 +876,7 @@ describe('TrackCard — audio effects', () => {
     });
 
     it('a successfully added effect is rendered in the effects list', () => {
+        renderEffectsTab();
         mockAddEffect.mockReturnValue(42);
         fireEvent.click(screen.getByText('Add Effect'));
         fireEvent.click(screen.getByText('Reverb'));
@@ -840,6 +887,7 @@ describe('TrackCard — audio effects', () => {
     });
 
     it('does not add an effect when addEffect returns null (engine not ready)', () => {
+        renderEffectsTab();
         mockAddEffect.mockReturnValue(null);
         fireEvent.click(screen.getByText('Add Effect'));
         fireEvent.click(screen.getByText('Reverb'));
@@ -847,6 +895,7 @@ describe('TrackCard — audio effects', () => {
     });
 
     it('clicking the X on an effect card calls removeEffect', () => {
+        renderEffectsTab();
         mockAddEffect.mockReturnValue(42);
         fireEvent.click(screen.getByText('Add Effect'));
         fireEvent.click(screen.getByText('Reverb'));
@@ -855,6 +904,7 @@ describe('TrackCard — audio effects', () => {
     });
 
     it('removed effect disappears from the list', () => {
+        renderEffectsTab();
         mockAddEffect.mockReturnValue(42);
         fireEvent.click(screen.getByText('Add Effect'));
         fireEvent.click(screen.getByText('Reverb'));
@@ -863,6 +913,7 @@ describe('TrackCard — audio effects', () => {
     });
 
     it('adding multiple effects shows all of them', () => {
+        renderEffectsTab();
         mockAddEffect.mockReturnValueOnce(1).mockReturnValueOnce(2);
         fireEvent.click(screen.getByText('Add Effect'));
         fireEvent.click(screen.getByText('Reverb'));
@@ -874,6 +925,7 @@ describe('TrackCard — audio effects', () => {
     });
 
     it('effect param slider calls setEffectParam when changed', () => {
+        renderEffectsTab();
         mockAddEffect.mockReturnValue(99);
         fireEvent.click(screen.getByText('Add Effect'));
         fireEvent.click(screen.getByText('Reverb'));
@@ -884,6 +936,7 @@ describe('TrackCard — audio effects', () => {
     });
 
     it('Pass Filter type selector buttons are rendered', () => {
+        renderEffectsTab();
         mockAddEffect.mockReturnValue(5);
         fireEvent.click(screen.getByText('Add Effect'));
         fireEvent.click(screen.getByText('Pass Filter'));

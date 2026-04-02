@@ -196,8 +196,6 @@ export function AppProviders({ children }) {
     const handleAddTrack = useCallback((trackData = {}) => {
         const isRealTrack = !!(trackData.audioUrl || trackData.spotifyId || trackData.originalSourceId);
         // Support extracted tracks referencing their original parent for limit purposes
-        const trackIdentifier = trackData.originalSourceId || trackData.spotifyId || trackData.audioUrl;
-
         setTrackLimitError(null);
         setTracks(prev => {
             // Spotify/upload tracks — fill the first empty default slot rather than appending.

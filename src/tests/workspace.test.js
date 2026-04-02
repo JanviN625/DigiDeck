@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import MainWorkspace from '../components/MainWorkspace';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -156,6 +156,7 @@ describe('MainWorkspace — track limit error notification', () => {
         render(<MainWorkspace />);
         // The close button is an X icon button next to the error message
         const closeButtons = screen.getAllByRole('button');
+        // eslint-disable-next-line testing-library/no-node-access
         const closeBtn = closeButtons.find(btn => btn.closest('[class*="fixed"]'));
         if (closeBtn) fireEvent.click(closeBtn);
         expect(mockSetTrackLimitError).toHaveBeenCalledWith(null);
@@ -182,45 +183,37 @@ describe('MainWorkspace — drag and drop', () => {
         const cards = screen.getAllByTestId('track-card');
 
         // Start dragging card at index 0
-        act(() => {
-            fireEvent.dragStart(cards[0], {
-                dataTransfer: { setData: jest.fn(), effectAllowed: '' },
-            });
+        fireEvent.dragStart(cards[0], {
+            dataTransfer: { setData: jest.fn(), effectAllowed: '' },
         });
 
         // Gap zones are div siblings of the track cards (exclude the Add New Track button).
         // When dragging index 0, gap zones 0 and 1 are "useless gaps" (no onDrop handler).
         // Drop on gap zone index 2 — valid target that triggers handleMoveTrack(0, 1).
+        // eslint-disable-next-line testing-library/no-node-access
         const container = cards[0].parentElement;
-        const gapZones = container
-            ? [...container.children].filter(el =>
-                !el.hasAttribute('data-testid') && el.tagName !== 'BUTTON')
-            : [];
+        // eslint-disable-next-line testing-library/no-node-access
+        const containerChildren = container ? [...container.children] : [];
+        const gapZones = containerChildren.filter(el =>
+            !el.hasAttribute('data-testid') && el.tagName !== 'BUTTON');
 
-        if (gapZones.length > 2) {
-            act(() => {
-                fireEvent.drop(gapZones[2], {
-                    dataTransfer: { getData: jest.fn(() => '0') },
-                });
-            });
-            expect(mockHandleMoveTrack).toHaveBeenCalled();
-        }
+        expect(gapZones.length).toBeGreaterThan(2);
+        fireEvent.drop(gapZones[2], {
+            dataTransfer: { getData: jest.fn(() => '0') },
+        });
+        expect(mockHandleMoveTrack).toHaveBeenCalled();
     });
 
     it('resets drag state (draggedIndex) when drag ends', () => {
         render(<MainWorkspace />);
         const cards = screen.getAllByTestId('track-card');
 
-        act(() => {
-            fireEvent.dragStart(cards[0], {
-                dataTransfer: { setData: jest.fn(), effectAllowed: '' },
-            });
+        fireEvent.dragStart(cards[0], {
+            dataTransfer: { setData: jest.fn(), effectAllowed: '' },
         });
 
         // After drag ends, dragged styling should be cleared
-        act(() => {
-            fireEvent.dragEnd(cards[0]);
-        });
+        fireEvent.dragEnd(cards[0]);
 
         expect(cards[0]).not.toHaveAttribute('data-dragged', 'true');
     });
@@ -273,23 +266,21 @@ describe('MainWorkspace — gap zone hover behavior', () => {
         render(<MainWorkspace />);
         const cards = screen.getAllByTestId('track-card');
 
-        act(() => {
-            fireEvent.dragStart(cards[0], {
-                dataTransfer: { setData: jest.fn(), effectAllowed: '' },
-            });
+        fireEvent.dragStart(cards[0], {
+            dataTransfer: { setData: jest.fn(), effectAllowed: '' },
         });
 
         // dragOver on the last gap zone (after all cards)
+        // eslint-disable-next-line testing-library/no-node-access
         const container = cards[0].parentElement;
+        // eslint-disable-next-line testing-library/no-node-access
         const allChildren = container ? [...container.children] : [];
         const gapZones = allChildren.filter(
             el => !el.hasAttribute('data-testid') && el.tagName !== 'BUTTON'
         );
 
         if (gapZones.length > 0) {
-            act(() => {
-                fireEvent.dragOver(gapZones[gapZones.length - 1], { preventDefault: jest.fn(), stopPropagation: jest.fn() });
-            });
+            fireEvent.dragOver(gapZones[gapZones.length - 1], { preventDefault: jest.fn(), stopPropagation: jest.fn() });
             // The gap zone activates — no assertion on text needed, just no throw
         }
     });
@@ -297,27 +288,26 @@ describe('MainWorkspace — gap zone hover behavior', () => {
     it('schedules gap clear on drag leave from a gap zone', () => {
         render(<MainWorkspace />);
         const cards = screen.getAllByTestId('track-card');
+        // eslint-disable-next-line testing-library/no-node-access
         const container = cards[0].parentElement;
-        const gapZones = container
-            ? [...container.children].filter(el => !el.hasAttribute('data-testid') && el.tagName !== 'BUTTON')
-            : [];
+        // eslint-disable-next-line testing-library/no-node-access
+        const containerChildren2 = container ? [...container.children] : [];
+        const gapZones = containerChildren2.filter(el => !el.hasAttribute('data-testid') && el.tagName !== 'BUTTON');
 
         if (gapZones.length > 0) {
-            act(() => { fireEvent.dragLeave(gapZones[0]); });
+            fireEvent.dragLeave(gapZones[0]);
             // Timer is scheduled — no throw expected
-            act(() => { jest.runAllTimers(); });
+            jest.runAllTimers();
         }
     });
 
     it('resets drag state on dragEnd', () => {
         render(<MainWorkspace />);
         const cards = screen.getAllByTestId('track-card');
-        act(() => {
-            fireEvent.dragStart(cards[0], {
-                dataTransfer: { setData: jest.fn(), effectAllowed: '' },
-            });
+        fireEvent.dragStart(cards[0], {
+            dataTransfer: { setData: jest.fn(), effectAllowed: '' },
         });
-        act(() => { fireEvent.dragEnd(cards[0]); });
+        fireEvent.dragEnd(cards[0]);
         expect(cards[0]).not.toHaveAttribute('data-dragged', 'true');
     });
 });
@@ -339,19 +329,18 @@ describe('MainWorkspace — GapZone toIndex calculation', () => {
 
     it('does not call handleMoveTrack when dataTransfer has no trackIndex', () => {
         render(<MainWorkspace />);
+        // eslint-disable-next-line testing-library/no-node-access
         const container = screen.getAllByTestId('track-card')[0].parentElement;
         if (!container) return;
 
+        // eslint-disable-next-line testing-library/no-node-access
         const gapZone = [...container.children].find(
             el => !el.hasAttribute('data-testid')
         );
-        if (gapZone) {
-            act(() => {
-                fireEvent.drop(gapZone, {
-                    dataTransfer: { getData: jest.fn(() => '') },
-                });
-            });
-            expect(mockHandleMoveTrack).not.toHaveBeenCalled();
-        }
+        expect(gapZone).toBeDefined();
+        fireEvent.drop(gapZone, {
+            dataTransfer: { getData: jest.fn(() => '') },
+        });
+        expect(mockHandleMoveTrack).not.toHaveBeenCalled();
     });
 });

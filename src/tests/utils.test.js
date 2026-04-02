@@ -76,10 +76,10 @@ describe('DEFAULT_SETTINGS shape', () => {
         expect(DEFAULT_SETTINGS.defaultFadeOut).toBe(0);
     });
 
-    it('splitAtPlayhead keybind defaults to Ctrl+S', () => {
+    it('splitAtPlayhead keybind defaults to X (no modifiers)', () => {
         const kb = DEFAULT_SETTINGS.keybinds.splitAtPlayhead;
-        expect(kb.key).toBe('s');
-        expect(kb.ctrl).toBe(true);
+        expect(kb.key).toBe('x');
+        expect(kb.ctrl).toBe(false);
         expect(kb.shift).toBe(false);
         expect(kb.alt).toBe(false);
     });

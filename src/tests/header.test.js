@@ -58,6 +58,18 @@ jest.mock('@heroui/react', () => ({
     ),
     DropdownSection: ({ children }) => <div>{children}</div>,
     Spinner: () => <span data-testid="spinner" />,
+    Slider: ({ value, onChange, minValue, maxValue, step, 'aria-label': ariaLabel }) => (
+        <input
+            data-testid="heroui-slider"
+            type="range"
+            value={value ?? 0}
+            min={minValue}
+            max={maxValue}
+            step={step}
+            aria-label={ariaLabel}
+            onChange={(e) => onChange && onChange(Number(e.target.value))}
+        />
+    ),
 }));
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -182,6 +194,7 @@ describe('Header — transport controls', () => {
         // The play/pause button is the first button in the transport area
         const transportButtons = screen
             .getAllByRole('button')
+            // eslint-disable-next-line testing-library/no-node-access
             .filter(btn => btn.closest('[class*="bg-base-900/60"]'));
         fireEvent.click(transportButtons[0]);
         expect(mockSetUniversalIsPlaying).toHaveBeenCalledTimes(1);
@@ -266,6 +279,6 @@ describe('Header — Export and Mix Preview', () => {
         AudioEngine.renderOffline.mockReturnValue(new Promise(() => {}));
         render(<Header />);
         fireEvent.click(screen.getByText('Export'));
-        await waitFor(() => expect(screen.getByText('Exporting…')).toBeInTheDocument());
+        expect(await screen.findByText('Exporting…')).toBeInTheDocument();
     });
 });
