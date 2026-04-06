@@ -1,3 +1,5 @@
+// Requirements: [FR-003] [FR-004] [FR-019] [FR-020] [NFR-003]
+
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import MainWorkspace from '../components/MainWorkspace';
@@ -95,7 +97,7 @@ describe('MainWorkspace — rendering', () => {
 
 // ─── Add New Track button ─────────────────────────────────────────────────────
 
-describe('MainWorkspace — Add New Track button', () => {
+describe('MainWorkspace — Add New Track button', () => { // [FR-004] [FR-020]
     beforeEach(() => jest.clearAllMocks());
 
     it('shows the Add New Track button when track count is below 5', () => {
@@ -126,7 +128,7 @@ describe('MainWorkspace — Add New Track button', () => {
 
 // ─── Track limit error notification ──────────────────────────────────────────
 
-describe('MainWorkspace — track limit error notification', () => {
+describe('MainWorkspace — track limit error notification', () => { // [FR-020]
     beforeEach(() => jest.clearAllMocks());
 
     it('displays the error message when trackLimitError is set', () => {
@@ -165,7 +167,7 @@ describe('MainWorkspace — track limit error notification', () => {
 
 // ─── Drag and drop — gap zone logic ──────────────────────────────────────────
 
-describe('MainWorkspace — drag and drop', () => {
+describe('MainWorkspace — drag and drop', () => { // [FR-019]
     beforeEach(() => {
         jest.clearAllMocks();
         setupUseMix({ tracks: makeTracks(3) });
@@ -221,7 +223,7 @@ describe('MainWorkspace — drag and drop', () => {
 
 // ─── Settings defaults passed to handleAddTrack ──────────────────────────────
 
-describe('MainWorkspace — settings defaults on Add New Track', () => {
+describe('MainWorkspace — settings defaults on Add New Track', () => { // [NFR-003]
     beforeEach(() => {
         jest.clearAllMocks();
         localStorage.clear();

@@ -1,3 +1,5 @@
+// Requirements: [FR-003] [FR-004] [FR-005] [FR-007] [FR-008] [FR-019] [FR-020]
+
 import React from 'react';
 import { renderHook, act } from '@testing-library/react';
 import { AppProviders, useMix, useSpotifyConnect } from '../spotify/appContext';
@@ -179,7 +181,7 @@ describe('handleAddTrack — empty button click (no trackData)', () => {
 
 // ─── handleAddTrack — track limit ────────────────────────────────────────────
 
-describe('handleAddTrack — track limit (max 5)', () => {
+describe('handleAddTrack — track limit (max 5)', () => { // [FR-020]
     beforeEach(() => {
         setupMocks();
         jest.useFakeTimers();
@@ -309,7 +311,7 @@ describe('handleDeleteTrack', () => {
 
 // ─── handleMoveTrack ──────────────────────────────────────────────────────────
 
-describe('handleMoveTrack', () => {
+describe('handleMoveTrack', () => { // [FR-019]
     beforeEach(() => {
         setupMocks();
         localStorage.clear();
@@ -423,7 +425,7 @@ describe('triggerMasterStop', () => {
 
 // ─── Workspace persistence ────────────────────────────────────────────────────
 
-describe('workspace persistence', () => {
+describe('workspace persistence', () => { // [FR-007]
     beforeEach(() => {
         setupMocks();
         jest.useFakeTimers();
@@ -488,6 +490,26 @@ describe('workspace persistence', () => {
 
         const keys = Object.keys(localStorage);
         expect(keys.filter(k => k.startsWith('digideck_workspace_'))).toHaveLength(0);
+    });
+
+    it('saves audioUrl as a string reference — no raw audio binary fields', () => { // [FR-008]
+        const { result } = renderMix();
+
+        act(() => { capturedAuthCallback({ uid: 'user_persist' }); });
+        act(() => {
+            result.current.handleAddTrack({
+                title: 'Track With Audio',
+                audioUrl: 'https://storage.firebase.example/audio.mp3',
+            });
+        });
+        act(() => { jest.advanceTimersByTime(600); });
+
+        const saved = JSON.parse(localStorage.getItem('digideck_workspace_user_persist'));
+        const trackWithAudio = saved.find(t => t.audioUrl);
+        expect(trackWithAudio).toBeDefined();
+        expect(typeof trackWithAudio.audioUrl).toBe('string');
+        expect(trackWithAudio.audioBuffer).toBeUndefined();
+        expect(trackWithAudio.audioData).toBeUndefined();
     });
 });
 

@@ -1,3 +1,5 @@
+// Requirements: [FR-001] [FR-015] [NFR-002]
+
 import {
     fetchSpotifyApi,
     getUserPlaylists,
@@ -149,6 +151,16 @@ describe('fetchSpotifyApi', () => {
         await expect(fetchSpotifyApi('/bad-endpoint')).rejects.toThrow('Spotify API Error: 500');
     });
 
+    it('only sends the Authorization header to api.spotify.com URLs', async () => { // [NFR-002]
+        fetch.mockResolvedValueOnce(mockOk({ id: 'user_1' }));
+
+        await fetchSpotifyApi('/me');
+
+        const [url, options] = fetch.mock.calls[0];
+        expect(url).toMatch(/^https:\/\/api\.spotify\.com\//);
+        expect(options.headers.Authorization).toBe('Bearer mock_token');
+    });
+
     it('throws when no valid access token is available', async () => {
         localStorage.clear();
         const { auth } = require('../firebase/firebaseConfig');
@@ -158,7 +170,7 @@ describe('fetchSpotifyApi', () => {
     });
 });
 
-describe('getUserPlaylists', () => {
+describe('getUserPlaylists', () => { // [FR-001]
     beforeEach(() => {
         localStorage.setItem('access_token', 'mock_token');
         localStorage.setItem('spotify_expires_at', VALID_EXPIRES_AT);
@@ -234,7 +246,7 @@ describe('getSavedTracks', () => {
     });
 });
 
-describe('searchSpotify', () => {
+describe('searchSpotify', () => { // [FR-001]
     beforeEach(() => {
         localStorage.setItem('access_token', 'mock_token');
         localStorage.setItem('spotify_expires_at', VALID_EXPIRES_AT);
@@ -276,7 +288,7 @@ describe('searchSpotify', () => {
 
 // ─── Auth Flow ────────────────────────────────────────────────────────────────
 
-describe('processCallbackCode', () => {
+describe('processCallbackCode', () => { // [FR-015]
     beforeEach(() => {
         localStorage.setItem('code_verifier', 'mock_verifier');
         auth.currentUser = mockUser;

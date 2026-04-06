@@ -1,3 +1,5 @@
+// Requirements: [FR-001] [FR-002] [FR-005] [FR-014] [FR-017] [FR-018] [FR-023] [FR-024] [FR-026]
+
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import TrackCard from '../components/TrackCard';
@@ -195,7 +197,7 @@ beforeEach(() => {
 
 // ─── Rendering ────────────────────────────────────────────────────────────────
 
-describe('TrackCard — rendering', () => {
+describe('TrackCard — rendering', () => { // [FR-001]
     it('renders the track title in the name input', () => {
         render(<TrackCard {...defaultProps} />);
         expect(screen.getByDisplayValue('My Track')).toBeInTheDocument();
@@ -344,7 +346,7 @@ describe('TrackCard — delete and duplicate', () => {
 
 // ─── Visibility / Mute / Play (requires audioUrl) ────────────────────────────
 
-describe('TrackCard — audio controls', () => {
+describe('TrackCard — audio controls', () => { // [FR-002] [FR-004]
     const audioProps = { ...defaultProps, audioUrl: 'blob:mock' };
 
     it('play button is disabled when audioUrl is null', () => {
@@ -408,7 +410,7 @@ describe('TrackCard — audio controls', () => {
 
 // ─── Drag state ───────────────────────────────────────────────────────────────
 
-describe('TrackCard — drag state', () => {
+describe('TrackCard — drag state', () => { // [FR-019]
     it('applying isDragged prop adds opacity styling', () => {
         const { container } = render(<TrackCard {...defaultProps} isDragged={true} />);
         // The outer draggable div has class "opacity-50" when isDragged
@@ -499,7 +501,7 @@ describe('TrackCard — isMissing warning', () => {
 
 // ─── Volume slider ────────────────────────────────────────────────────────────
 
-describe('TrackCard — volume slider', () => {
+describe('TrackCard — volume slider', () => { // [FR-005]
     const audioProps = { ...defaultProps, audioUrl: 'blob:mock' };
 
     it('renders a volume slider when audioUrl is provided', () => {
@@ -585,7 +587,7 @@ describe('TrackCard — settings panel visibility', () => {
 
 // ─── Pitch controls ───────────────────────────────────────────────────────────
 
-describe('TrackCard — pitch controls', () => {
+describe('TrackCard — pitch controls', () => { // [FR-014] [FR-018] [FR-024]
     it('shows pitch at 0st initially', () => {
         renderWithSettings();
         expect(screen.getByText('0st')).toBeInTheDocument();
@@ -638,7 +640,7 @@ describe('TrackCard — pitch controls', () => {
 
 // ─── Speed controls ───────────────────────────────────────────────────────────
 
-describe('TrackCard — speed controls', () => {
+describe('TrackCard — speed controls', () => { // [FR-014] [FR-018] [FR-024]
     it('shows speed at 1.00x initially', () => {
         renderWithSettings();
         expect(screen.getByText('1.00x')).toBeInTheDocument();
@@ -705,7 +707,7 @@ describe('TrackCard — speed controls', () => {
 
 // ─── Quality warning ──────────────────────────────────────────────────────────
 
-describe('TrackCard — quality (G6) warning', () => {
+describe('TrackCard — quality (G6) warning', () => { // [NFR-005]
     it('does not show quality warning at default pitch and speed', () => {
         renderWithSettings();
         expect(screen.queryByText(/Audible artefacts/)).not.toBeInTheDocument();
@@ -749,7 +751,7 @@ describe('TrackCard — quality (G6) warning', () => {
 
 // ─── EQ controls ─────────────────────────────────────────────────────────────
 
-describe('TrackCard — EQ controls', () => {
+describe('TrackCard — EQ controls', () => { // [FR-005]
     it('renders EQ sliders for Lo, Mid, and Hi bands', () => {
         renderWithSettings();
         expect(screen.getByRole('slider', { name: 'EQ Lo' })).toBeInTheDocument();
@@ -850,7 +852,7 @@ const renderEffectsTab = () => {
     renderWithSettings();
 };
 
-describe('TrackCard — audio effects', () => {
+describe('TrackCard — audio effects', () => { // [FR-017]
     it('shows "No effects added." when no effects are present', () => {
         renderEffectsTab();
         expect(screen.getByText('No effects added.')).toBeInTheDocument();
@@ -942,5 +944,39 @@ describe('TrackCard — audio effects', () => {
         fireEvent.click(screen.getByText('Pass Filter'));
         expect(screen.getByText('High-pass')).toBeInTheDocument();
         expect(screen.getByText('Low-pass')).toBeInTheDocument();
+    });
+});
+
+// ─── Waveform ─────────────────────────────────────────────────────────────────
+
+describe('TrackCard — waveform', () => { // [FR-026]
+    it('waveform scroll container is rendered when audioUrl is set', () => {
+        const { container } = render(<TrackCard {...defaultProps} audioUrl="blob:mock" />);
+        // WaveSurfer renders into the absolute-inset div inside this scroll viewport
+        // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
+        expect(container.querySelector('.scrollbar-hide')).toBeInTheDocument();
+    });
+
+    it('waveform scroll container is not rendered without audioUrl', () => {
+        const { container } = render(<TrackCard {...defaultProps} />);
+        // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
+        expect(container.querySelector('.scrollbar-hide')).not.toBeInTheDocument();
+    });
+
+    it('WaveSurfer is not initialized without audioUrl', () => {
+        // WaveSurfer.create should not be called when there is no audio to display
+        const WaveSurfer = require('wavesurfer.js').default;
+        const createSpy = jest.spyOn(WaveSurfer, 'create');
+        render(<TrackCard {...defaultProps} />);
+        expect(createSpy).not.toHaveBeenCalled();
+        createSpy.mockRestore();
+    });
+
+    it('waveform target div is in the DOM when audioUrl is set', () => {
+        const { container } = render(<TrackCard {...defaultProps} audioUrl="blob:mock" />);
+        // The absolute inset-0 div is the WaveSurfer mounting target
+        // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
+        const waveformTarget = container.querySelector('.absolute.inset-0');
+        expect(waveformTarget).toBeInTheDocument();
     });
 });

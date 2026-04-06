@@ -1,3 +1,5 @@
+// Requirements: [FR-015] [NFR-003] [NFR-004]
+
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { AccountModal, SettingsModal } from '../components/ProfileModal';
@@ -200,7 +202,7 @@ describe('AccountModal — open/close', () => {
 // Index 0 = display name Save, index 1 = email Save.
 const saveBtn = (index = 0) => screen.getAllByText('Save')[index];
 
-describe('AccountModal — display name', () => {
+describe('AccountModal — display name', () => { // [NFR-004]
     it('seeds the display name input from user.displayName', () => {
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         expect(screen.getByDisplayValue('Test User')).toBeInTheDocument();
@@ -246,7 +248,7 @@ describe('AccountModal — display name', () => {
 
 // ─── AccountModal — email (email/password user) ───────────────────────────────
 
-describe('AccountModal — email (email/password user)', () => {
+describe('AccountModal — email (email/password user)', () => { // [NFR-004]
     it('renders an editable email input seeded from user.email', () => {
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         const emailInput = screen.getByDisplayValue('test@example.com');
@@ -288,7 +290,7 @@ describe('AccountModal — email (email/password user)', () => {
 
 // ─── AccountModal — email (Google user) ───────────────────────────────────────
 
-describe('AccountModal — email (Google user)', () => {
+describe('AccountModal — email (Google user)', () => { // [NFR-004]
     beforeEach(() => {
         setupMocks({
             auth: {
@@ -318,7 +320,7 @@ describe('AccountModal — email (Google user)', () => {
 
 // ─── AccountModal — profile photo ─────────────────────────────────────────────
 
-describe('AccountModal — profile photo', () => {
+describe('AccountModal — profile photo', () => { // [NFR-004]
     it('does not show "Remove photo" when user.photoURL is null', () => {
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         expect(screen.queryByText('Remove photo')).not.toBeInTheDocument();
@@ -383,7 +385,7 @@ describe('AccountModal — profile photo', () => {
 // anything inside it to appear. Every test in this block uses waitFor.
 const firestoreSnap = (data = {}) => ({ exists: () => true, data: () => data });
 
-describe('AccountModal — account details', () => {
+describe('AccountModal — account details', () => { // [NFR-004]
     beforeEach(() => {
         // Override the never-resolving default so the details section renders.
         const { getDoc } = require('firebase/firestore');
@@ -588,7 +590,7 @@ describe('SettingsModal — tab navigation', () => {
 
 // ─── SettingsModal — General tab ──────────────────────────────────────────────
 
-describe('SettingsModal — General tab', () => {
+describe('SettingsModal — General tab', () => { // [NFR-003]
     it('renders both toggle rows', () => {
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
         expect(screen.getByText('Confirm before deleting tracks')).toBeInTheDocument();
@@ -634,7 +636,7 @@ describe('SettingsModal — General tab', () => {
 
 // ─── SettingsModal — Controls tab ─────────────────────────────────────────────
 
-describe('SettingsModal — Controls tab', () => {
+describe('SettingsModal — Controls tab', () => { // [NFR-003]
     const renderControlsTab = () => {
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
         fireEvent.click(screen.getByText('Controls'));

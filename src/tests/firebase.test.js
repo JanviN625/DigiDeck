@@ -1,3 +1,5 @@
+// Requirements: [FR-015] [FR-016] [NFR-002] [NFR-004]
+
 import FirebaseService, { useFirebaseAuth } from '../firebase/firebase';
 import {
     signInWithPopup,
@@ -410,7 +412,7 @@ describe('useFirebaseAuth — firebase-profile-updated event', () => {
 
 // ─── useFirebaseAuth — updateDisplayName ─────────────────────────────────────
 
-describe('useFirebaseAuth — updateDisplayName', () => {
+describe('useFirebaseAuth — updateDisplayName', () => { // [NFR-004]
     beforeEach(() => {
         const { auth } = require('../firebase/firebaseConfig');
         auth.currentUser = { uid: mockUser.uid, reload: jest.fn().mockResolvedValue(undefined) };
@@ -458,7 +460,7 @@ describe('useFirebaseAuth — updateDisplayName', () => {
 
 // ─── useFirebaseAuth — updateProfilePhoto ────────────────────────────────────
 
-describe('useFirebaseAuth — updateProfilePhoto', () => {
+describe('useFirebaseAuth — updateProfilePhoto', () => { // [NFR-004]
     beforeEach(() => {
         const { auth } = require('../firebase/firebaseConfig');
         auth.currentUser = { uid: mockUser.uid, reload: jest.fn().mockResolvedValue(undefined) };
@@ -515,7 +517,7 @@ describe('useFirebaseAuth — updateProfilePhoto', () => {
 
 // ─── useFirebaseAuth — removeProfilePhoto ────────────────────────────────────
 
-describe('useFirebaseAuth — removeProfilePhoto', () => {
+describe('useFirebaseAuth — removeProfilePhoto', () => { // [NFR-004]
     beforeEach(() => {
         const { auth } = require('../firebase/firebaseConfig');
         auth.currentUser = { uid: mockUser.uid, reload: jest.fn().mockResolvedValue(undefined) };
@@ -574,7 +576,7 @@ describe('useFirebaseAuth — removeProfilePhoto', () => {
 
 // ─── useFirebaseAuth — updateUserEmail ───────────────────────────────────────
 
-describe('useFirebaseAuth — updateUserEmail', () => {
+describe('useFirebaseAuth — updateUserEmail', () => { // [NFR-004]
     beforeEach(() => {
         const { auth } = require('../firebase/firebaseConfig');
         auth.currentUser = { uid: mockUser.uid, email: mockUser.email, reload: jest.fn().mockResolvedValue(undefined) };

@@ -1,3 +1,5 @@
+// Requirements: [FR-003] [FR-004] [FR-009] [FR-015] [NFR-003] [NFR-004] [NFR-009]
+
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import Header from '../components/Header';
@@ -131,7 +133,7 @@ describe('Header — branding', () => {
 
 // ─── Project name ─────────────────────────────────────────────────────────────
 
-describe('Header — project name', () => {
+describe('Header — project name', () => { // [FR-009]
     it('shows default project name "Untitled project"', () => {
         render(<Header />);
         expect(screen.getByDisplayValue('Untitled project')).toBeInTheDocument();
@@ -169,7 +171,7 @@ describe('Header — project name', () => {
 
 // ─── Transport controls ───────────────────────────────────────────────────────
 
-describe('Header — transport controls', () => {
+describe('Header — transport controls', () => { // [FR-003] [FR-004]
     it('does not render transport controls when no tracks are loaded', () => {
         render(<Header />);
         expect(screen.queryByText('Idle')).not.toBeInTheDocument();
@@ -203,7 +205,7 @@ describe('Header — transport controls', () => {
 
 // ─── User profile / dropdown ──────────────────────────────────────────────────
 
-describe('Header — user profile', () => {
+describe('Header — user profile', () => { // [FR-015] [NFR-004]
     it('renders the avatar when user has no photoURL', () => {
         render(<Header />);
         expect(screen.getByTestId('avatar')).toBeInTheDocument();
@@ -246,7 +248,7 @@ describe('Header — user profile', () => {
 
 // ─── Export / Mix Preview ─────────────────────────────────────────────────────
 
-describe('Header — Export and Mix Preview', () => {
+describe('Header — Export and Mix Preview', () => { // [NFR-009]
     it('renders an Export button', () => {
         render(<Header />);
         expect(screen.getByText('Export')).toBeInTheDocument();

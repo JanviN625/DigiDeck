@@ -1,3 +1,5 @@
+// Requirements: [FR-015]
+
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import AuthScreen from '../components/AuthScreen';

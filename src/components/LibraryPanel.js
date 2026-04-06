@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronLeft, Library, AlertCircle, ChevronRight, Upload, Search, Loader2, Music, X, Trash2 } from 'lucide-react';
+import { ChevronLeft, Library, AlertCircle, AlertTriangle, ChevronRight, Upload, Search, Loader2, Music, X, Trash2 } from 'lucide-react';
 import { Button } from '@heroui/react';
 import { useSpotify, useMix, useSpotifyConnect } from '../spotify/appContext';
 import { readId3Tags, spotifyConfirmMatch, buildSpotifyQuery } from '../utils/helpers';
@@ -38,6 +38,8 @@ export default function LibraryPanel() {
     const [userUploads, setUserUploads] = useState([]);
     const [currentUser, setCurrentUser] = useState(null);
     const [uploadTipDismissed, setUploadTipDismissed] = useState(false);
+    const [uploadError, setUploadError] = useState(null);
+    const [deleteError, setDeleteError] = useState(null);
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -122,6 +124,7 @@ export default function LibraryPanel() {
         const file = e.target.files?.[0];
         if (!file || !currentUser) return;
 
+        setUploadError(null);
         setUploadingFiles(true);
         try {
             const timestamp = Date.now();
@@ -194,7 +197,7 @@ export default function LibraryPanel() {
             }
 
         } catch (err) {
-            console.error("Upload failed", err);
+            setUploadError(err.message || 'Upload failed. Please try again.');
         } finally {
             setUploadingFiles(false);
             if (fileInputRef.current) fileInputRef.current.value = '';
@@ -205,6 +208,7 @@ export default function LibraryPanel() {
         e.stopPropagation();
         if (!currentUser) return;
 
+        setDeleteError(null);
         try {
             // Mark any workspace tracks using this file as missing
             const affected = tracks.filter(t => t.spotifyId === 'local-' + upload.id);
@@ -218,7 +222,7 @@ export default function LibraryPanel() {
             // Delete from firestore
             await deleteDoc(doc(db, `users/${currentUser.uid}/uploads`, upload.id));
         } catch (err) {
-            console.error("Failed to delete track", err);
+            setDeleteError(err.message || 'Failed to delete. Please try again.');
         }
     };
 
@@ -357,12 +361,41 @@ export default function LibraryPanel() {
                             </Button>
 
                             {currentUser && !uploadTipDismissed && (
-                                <div className="flex items-center gap-1.5 mt-1 mb-1 px-0.5">
-                                    <AlertCircle size={11} className="text-base-450 shrink-0" />
-                                    <span className="text-[10px] text-base-400 leading-snug flex-1">Name your file as the song title before uploading for best results.</span>
+                                <div className="flex items-center gap-1.5 mt-1 mb-1 px-1.5 py-1.5 bg-red-950/25 border border-red-800/35 rounded-lg">
+                                    <AlertTriangle size={11} className="text-red-400 shrink-0" />
+                                    <span className="text-[10px] text-red-300/90 leading-snug flex-1">Only upload files you own or have rights to use. Uploading copyrighted material without permission may violate applicable laws.</span>
                                     <button
                                         onClick={() => setUploadTipDismissed(true)}
-                                        className="text-base-500 hover:text-base-300 transition-colors shrink-0"
+                                        className="text-red-600 hover:text-red-400 transition-colors shrink-0"
+                                        title="Dismiss"
+                                    >
+                                        <X size={10} />
+                                    </button>
+                                </div>
+                            )}
+
+                            {uploadError && (
+                                <div className="flex items-start gap-1.5 mt-1 mb-1 px-1.5 py-1.5 bg-red-950/30 border border-red-800/40 rounded-lg">
+                                    <AlertCircle size={11} className="text-red-400 shrink-0 mt-0.5" />
+                                    <span className="text-[10px] text-red-300/90 leading-snug flex-1">{uploadError}</span>
+                                    <button
+                                        onClick={() => setUploadError(null)}
+                                        className="text-red-600 hover:text-red-400 transition-colors shrink-0"
+                                        title="Dismiss"
+                                    >
+                                        <X size={10} />
+                                    </button>
+                                </div>
+                            )}
+
+                            {deleteError && (
+                                <div className="flex items-start gap-1.5 mt-1 mb-1 px-1.5 py-1.5 bg-red-950/30 border border-red-800/40 rounded-lg">
+                                    <AlertCircle size={11} className="text-red-400 shrink-0 mt-0.5" />
+                                    <span className="text-[10px] text-red-300/90 leading-snug flex-1">{deleteError}</span>
+                                    <button
+                                        onClick={() => setDeleteError(null)}
+                                        className="text-red-600 hover:text-red-400 transition-colors shrink-0"
+                                        title="Dismiss"
                                     >
                                         <X size={10} />
                                     </button>

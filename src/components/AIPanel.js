@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { ChevronRight, Sparkles, Send, History, Plus, Trash2, X, Bot } from 'lucide-react';
+import { ChevronRight, Sparkles, Send, History, Plus, Trash2, X, Bot, AlertTriangle } from 'lucide-react';
 import { Avatar, ScrollShadow } from '@heroui/react';
 import { useMix } from '../spotify/appContext';
 import { useFirebaseAuth } from '../firebase/firebase';
@@ -589,6 +589,25 @@ export default function AIPanel() {
                     <>
                         {/* Message list */}
                         <ScrollShadow className="flex-1 px-3 py-3 space-y-4 custom-scrollbar overflow-y-auto">
+                            {/* Persistent bias disclosure -- rendered before all chat messages */}
+                            <div className="flex items-end gap-2">
+                                <Avatar
+                                    size="sm"
+                                    icon={<Bot size={14} />}
+                                    classNames={{
+                                        base: 'bg-base-700 shrink-0',
+                                        icon: 'text-base-300',
+                                    }}
+                                />
+                                <div className="bg-base-800 border border-base-700 rounded-2xl rounded-bl-none px-3.5 py-2.5 max-w-[85%] shadow-sm">
+                                    <div className="flex items-center gap-1.5 mb-1">
+                                        <AlertTriangle size={10} className="text-red-400 shrink-0" />
+                                        <span className="text-[10px] font-semibold uppercase tracking-wide text-red-400">Heads up</span>
+                                    </div>
+                                    <p className="text-[12px] text-base-200 leading-relaxed">Track suggestions are based on training data and may be inaccurate. BPM, key, and energy values shown are measured directly from your audio -- not guessed.</p>
+                                </div>
+                            </div>
+
                             {messages.map((msg, i) => (
                                 msg.role === 'assistant' ? (
                                     <div key={i} className="flex items-end gap-2">
