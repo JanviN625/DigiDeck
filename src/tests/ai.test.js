@@ -1,3 +1,5 @@
+// Requirements: [FR-010] [FR-011] [FR-012] [FR-013] [FR-017] [FR-018] [FR-025] [FR-027] [NFR-001] [NFR-002] [NFR-005]
+
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import AIPanel from '../components/AIPanel';
@@ -275,7 +277,7 @@ describe('AIPanel — message flow', () => {
 
 // ─── AIPanel — chat management ────────────────────────────────────────────────
 
-describe('AIPanel — chat management', () => {
+describe('AIPanel — chat management', () => { // [FR-025]
     it('opens chat history modal when history button clicked', async () => {
         render(<AIPanel />);
         fireEvent.click(await screen.findByTitle('Chat History'));
@@ -558,7 +560,7 @@ describe('system prompt — EQ constraint', () => {
 
 // ─── system prompt — pitch constraint ────────────────────────────────────────
 
-describe('system prompt — pitch constraint', () => {
+describe('system prompt — pitch constraint', () => { // [NFR-005]
     it('recommends staying within ±3 semitones', async () => {
         await setupAndSend([]);
         expect(getPrompt()).toContain('±3');
@@ -577,7 +579,7 @@ describe('system prompt — pitch constraint', () => {
 
 // ─── system prompt — effects constraints ─────────────────────────────────────
 
-describe('system prompt — effects constraints', () => {
+describe('system prompt — effects constraints', () => { // [FR-017]
     it('includes reverb with mix range 0–1', async () => {
         await setupAndSend([]);
         const p = getPrompt();
@@ -685,7 +687,7 @@ describe('system prompt — track data', () => {
 
 // ─── system prompt — segment data ────────────────────────────────────────────
 
-describe('system prompt — segment data', () => {
+describe('system prompt — segment data', () => { // [FR-018]
     it('includes segment pitch value', async () => {
         const track = makeTrack({
             initialSegments: [{
@@ -761,7 +763,7 @@ describe('system prompt — segment data', () => {
 
 // ─── API call parameters ──────────────────────────────────────────────────────
 
-describe('API call parameters', () => {
+describe('API call parameters', () => { // [FR-013] [NFR-001]
     it('calls /api/aiChat proxy when no direct API key set', async () => {
         await setupAndSend([], 'hello');
         expect(global.fetch).toHaveBeenCalledWith('/api/aiChat', expect.any(Object));
@@ -808,5 +810,88 @@ describe('API call parameters', () => {
         await setupAndSend([], 'hello');
         expect(typeof getBody().systemPrompt).toBe('string');
         expect(getBody().systemPrompt.length).toBeGreaterThan(0);
+    });
+});
+
+// ─── AIPanel -- bias disclosure ───────────────────────────────────────────────
+
+describe('AIPanel -- bias disclosure', () => { // [FR-027]
+    it('renders a "Heads up" bias disclosure before chat messages', () => {
+        render(<AIPanel />);
+        expect(screen.getByText(/Heads up/i)).toBeInTheDocument();
+    });
+
+    it('bias disclosure states suggestions may be inaccurate', () => {
+        render(<AIPanel />);
+        expect(screen.getByText(/may be inaccurate/i)).toBeInTheDocument();
+    });
+
+    it('bias disclosure clarifies BPM and key are measured from audio', () => {
+        render(<AIPanel />);
+        expect(screen.getByText(/measured directly from your audio/i)).toBeInTheDocument();
+    });
+
+    it('bias disclosure is still visible after a user message is sent', async () => {
+        mockFetch('AI response');
+        render(<AIPanel />);
+        const input = await screen.findByPlaceholderText('Ask for track suggestions\u2026');
+        fireEvent.change(input, { target: { value: 'suggest something' } });
+        fireEvent.click(screen.getByTitle('Send'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+        expect(screen.getByText(/may be inaccurate/i)).toBeInTheDocument();
+    });
+});
+
+// ─── AIPanel — data privacy ───────────────────────────────────────────────────
+
+describe('AIPanel -- data privacy', () => { // [NFR-002]
+    it('all fetch calls during a conversation go only to /api/aiChat', async () => {
+        setupMocks({ mix: { tracks: [makeTrack()] } });
+        mockFetch('response');
+        render(<AIPanel />);
+        const input = await screen.findByPlaceholderText('Ask for track suggestions\u2026');
+        fireEvent.change(input, { target: { value: 'Suggest tracks' } });
+        fireEvent.click(screen.getByTitle('Send'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+        const allUrls = global.fetch.mock.calls.map(call => call[0]);
+        expect(allUrls.every(url => url === '/api/aiChat')).toBe(true);
+    });
+
+    it('workspace data is not sent to any external URL directly', async () => {
+        setupMocks({ mix: { tracks: [makeTrack()] } });
+        mockFetch('response');
+        render(<AIPanel />);
+        const input = await screen.findByPlaceholderText('Ask for track suggestions\u2026');
+        fireEvent.change(input, { target: { value: 'Suggest tracks' } });
+        fireEvent.click(screen.getByTitle('Send'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+        const allUrls = global.fetch.mock.calls.map(call => call[0]);
+        // No direct call to Anthropic or any other third-party host
+        expect(allUrls.every(url => !url.startsWith('http'))).toBe(true);
+        expect(allUrls.every(url => !url.includes('anthropic.com'))).toBe(true);
+    });
+
+    it('sending multiple messages still only calls /api/aiChat', async () => {
+        setupMocks({ mix: { tracks: [makeTrack()] } });
+        // Set up both responses on one mock so call count accumulates correctly
+        global.fetch = jest.fn()
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ content: 'first response' }) })
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ content: 'second response' }) });
+
+        render(<AIPanel />);
+        const input = await screen.findByPlaceholderText('Ask for track suggestions\u2026');
+
+        fireEvent.change(input, { target: { value: 'First message' } });
+        fireEvent.click(screen.getByTitle('Send'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+
+        fireEvent.change(input, { target: { value: 'Second message' } });
+        fireEvent.click(screen.getByTitle('Send'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+
+        const allUrls = global.fetch.mock.calls.map(call => call[0]);
+        expect(allUrls.every(url => url === '/api/aiChat')).toBe(true);
     });
 });

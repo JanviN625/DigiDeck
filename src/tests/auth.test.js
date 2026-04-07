@@ -1,3 +1,5 @@
+// Requirements: [FR-015]
+
 import { handleCallback, logout } from '../spotify/spotifyAuth';
 import FirebaseService from '../firebase/FirebaseService';
 import { signInWithCustomToken } from 'firebase/auth';

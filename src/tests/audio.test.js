@@ -1,3 +1,5 @@
+// Requirements: [FR-002] [FR-005] [FR-017] [FR-023] [FR-024]
+
 // ─── soundtouchjs mock (hoisted before imports) ───────────────────────────────
 
 jest.mock('soundtouchjs', () => ({
@@ -231,7 +233,7 @@ describe('AudioEngine', () => {
 
     // ─── seek ───────────────────────────────────────────────────────────────────
 
-    describe('seek', () => {
+    describe('seek', () => { // [FR-002]
         beforeEach(async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
         });
@@ -260,7 +262,7 @@ describe('AudioEngine', () => {
 
     // ─── setVolume ──────────────────────────────────────────────────────────────
 
-    describe('setVolume', () => {
+    describe('setVolume', () => { // [FR-005]
         beforeEach(async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
         });
@@ -289,7 +291,7 @@ describe('AudioEngine', () => {
 
     // ─── setPitch ───────────────────────────────────────────────────────────────
 
-    describe('setPitch', () => {
+    describe('setPitch', () => { // [FR-018] [FR-024]
         beforeEach(async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
         });
@@ -311,7 +313,7 @@ describe('AudioEngine', () => {
 
     // ─── setSpeed ───────────────────────────────────────────────────────────────
 
-    describe('setSpeed', () => {
+    describe('setSpeed', () => { // [FR-018] [FR-024]
         beforeEach(async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
         });
@@ -333,7 +335,7 @@ describe('AudioEngine', () => {
 
     // ─── setEQ ──────────────────────────────────────────────────────────────────
 
-    describe('setEQ', () => {
+    describe('setEQ', () => { // [FR-005]
         beforeEach(async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
         });
@@ -368,7 +370,7 @@ describe('AudioEngine', () => {
 
     // ─── addEffect ──────────────────────────────────────────────────────────────
 
-    describe('addEffect', () => {
+    describe('addEffect', () => { // [FR-017]
         beforeEach(async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
         });
@@ -446,7 +448,7 @@ describe('AudioEngine', () => {
 
     // ─── removeEffect ───────────────────────────────────────────────────────────
 
-    describe('removeEffect', () => {
+    describe('removeEffect', () => { // [FR-017]
         beforeEach(async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
         });
@@ -478,7 +480,7 @@ describe('AudioEngine', () => {
 
     // ─── setEffectEnabled ───────────────────────────────────────────────────────
 
-    describe('setEffectEnabled', () => {
+    describe('setEffectEnabled', () => { // [FR-017]
         beforeEach(async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
         });
@@ -503,7 +505,7 @@ describe('AudioEngine', () => {
 
     // ─── setEffectParam ─────────────────────────────────────────────────────────
 
-    describe('setEffectParam', () => {
+    describe('setEffectParam', () => { // [FR-017]
         beforeEach(async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
         });
@@ -571,7 +573,7 @@ describe('AudioEngine', () => {
 
     // ─── applyFadeIn / applyFadeOut ─────────────────────────────────────────────
 
-    describe('applyFadeIn', () => {
+    describe('applyFadeIn', () => { // [FR-018]
         beforeEach(async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
         });
@@ -594,7 +596,7 @@ describe('AudioEngine', () => {
         });
     });
 
-    describe('applyFadeOut', () => {
+    describe('applyFadeOut', () => { // [FR-018]
         beforeEach(async () => {
             await AudioEngine.loadTrack('t1', createMockBuffer());
         });
@@ -750,7 +752,7 @@ describe('AudioEngine', () => {
 
 // ─── EssentiaAnalyzer ─────────────────────────────────────────────────────────
 
-describe('EssentiaAnalyzer', () => {
+describe('EssentiaAnalyzer', () => { // [FR-023]
     let analyzeAudioBuffer;
 
     beforeEach(() => {
@@ -765,7 +767,7 @@ describe('EssentiaAnalyzer', () => {
         delete global.Worker;
     });
 
-    describe('analyzeAudioBuffer — worker creation', () => {
+    describe('analyzeAudioBuffer — worker creation', () => { // [FR-023]
         it('creates a Worker pointing at the correct script path', () => {
             const mockBuffer = {
                 sampleRate: 44100,
@@ -806,7 +808,7 @@ describe('EssentiaAnalyzer', () => {
         });
     });
 
-    describe('analyzeAudioBuffer — success path', () => {
+    describe('analyzeAudioBuffer — success path', () => { // [FR-023]
         it('resolves with bpm, key, scale, and beatPositions on a "done" message', async () => {
             const mockBuffer = {
                 sampleRate: 44100,
@@ -861,7 +863,7 @@ describe('EssentiaAnalyzer', () => {
         });
     });
 
-    describe('analyzeAudioBuffer — error paths', () => {
+    describe('analyzeAudioBuffer — error paths', () => { // [FR-023]
         it('rejects with the error message when the worker sends an "error" message', async () => {
             const mockBuffer = {
                 sampleRate: 44100,

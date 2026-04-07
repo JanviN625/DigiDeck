@@ -1,3 +1,5 @@
+// Requirements: [FR-001] [FR-008] [FR-015] [FR-016] [FR-021] [FR-022] [NFR-002] [NFR-007] [NFR-008]
+
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import LibraryPanel from '../components/LibraryPanel';
@@ -179,7 +181,7 @@ describe('LibraryPanel — collapse and expand', () => {
 
 // ─── Upload section ───────────────────────────────────────────────────────────
 
-describe('LibraryPanel — upload section', () => {
+describe('LibraryPanel — upload section', () => { // [FR-016]
     it('shows "Sign in to upload" message when not logged in', () => {
         render(<LibraryPanel />);
         // No auth callback fired yet — currentUser is null
@@ -234,7 +236,7 @@ describe('LibraryPanel — upload section', () => {
 
 // ─── Spotify section ──────────────────────────────────────────────────────────
 
-describe('LibraryPanel — Spotify section (not connected)', () => {
+describe('LibraryPanel — Spotify section (not connected)', () => { // [FR-015]
     it('shows Connect Spotify button when not connected', () => {
         render(<LibraryPanel />);
         expect(screen.getByText('Connect Spotify')).toBeInTheDocument();
@@ -290,36 +292,33 @@ describe('LibraryPanel — Spotify section (connected)', () => {
     });
 });
 
-// ─── Upload tip dismiss ───────────────────────────────────────────────────────
+// ─── Copyright disclaimer ─────────────────────────────────────────────────────
 
-describe('LibraryPanel — upload tip dismiss', () => {
-    it('shows the tip when user is logged in', async () => {
+describe('LibraryPanel — copyright disclaimer', () => { // [NFR-008]
+    it('shows copyright disclaimer when user is logged in', async () => {
         render(<LibraryPanel />);
         await act(async () => { capturedAuthCb(mockUser); });
         await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
-        expect(screen.getByText(/Name your file as the song title/i)).toBeInTheDocument();
+        expect(screen.getByText(/Only upload files you own/i)).toBeInTheDocument();
     });
 
-    it('hides the tip when the X button inside it is clicked', async () => {
+    it('does not show copyright disclaimer when not logged in', () => {
+        render(<LibraryPanel />);
+        expect(screen.queryByText(/Only upload files you own/i)).not.toBeInTheDocument();
+    });
+
+    it('dismisses copyright disclaimer when Dismiss button is clicked', async () => {
         render(<LibraryPanel />);
         await act(async () => { capturedAuthCb(mockUser); });
         await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
-
-        // eslint-disable-next-line testing-library/no-node-access
-        const tipText = screen.getByText(/Name your file as the song title/i);
-        // eslint-disable-next-line testing-library/no-node-access
-        const tipContainer = tipText.closest('div');
-        // eslint-disable-next-line testing-library/no-node-access
-        const dismissBtn = tipContainer.querySelector('button');
-        fireEvent.click(dismissBtn);
-
-        expect(screen.queryByText(/Name your file as the song title/i)).not.toBeInTheDocument();
+        fireEvent.click(screen.getByTitle('Dismiss'));
+        expect(screen.queryByText(/Only upload files you own/i)).not.toBeInTheDocument();
     });
 });
 
 // ─── Delete upload ────────────────────────────────────────────────────────────
 
-describe('LibraryPanel — delete upload', () => {
+describe('LibraryPanel — delete upload', () => { // [FR-016]
     const singleUpload = {
         id: 'upload_1',
         data: () => ({
@@ -368,7 +367,7 @@ describe('LibraryPanel — delete upload', () => {
 
 // ─── File upload ──────────────────────────────────────────────────────────────
 
-describe('LibraryPanel — file upload', () => {
+describe('LibraryPanel — file upload', () => { // [FR-016] [FR-021] [FR-022]
     beforeEach(() => {
         global.fetch = jest.fn().mockResolvedValue({ ok: false }); // fingerprint step fails silently
         // resetMocks:true clears .mockResolvedValue — restore readId3Tags here.
@@ -427,7 +426,7 @@ describe('LibraryPanel — file upload', () => {
 
 // ─── Spotify search ───────────────────────────────────────────────────────────
 
-describe('LibraryPanel — Spotify search results', () => {
+describe('LibraryPanel — Spotify search results', () => { // [FR-001]
     beforeEach(() => {
         setupMocks({ spotify: { isSpotifyConnected: true } });
     });
@@ -479,5 +478,303 @@ describe('LibraryPanel — Spotify search results', () => {
         const clearBtn = screen.getByRole('button', { name: '' });
         fireEvent.click(clearBtn);
         await waitFor(() => expect(screen.queryByText('Found Track')).not.toBeInTheDocument());
+    });
+});
+
+// ─── Upload error notification ────────────────────────────────────────────────
+
+describe('LibraryPanel — upload error notification', () => { // [NFR-007]
+    beforeEach(() => {
+        const { readId3Tags } = require('../utils/helpers');
+        readId3Tags.mockResolvedValue({ title: null, artist: null, albumArtBlob: null });
+        global.fetch = jest.fn().mockResolvedValue({ ok: false });
+    });
+    afterEach(() => { delete global.fetch; });
+
+    const triggerUpload = async (filename = 'track.mp3') => {
+        // eslint-disable-next-line testing-library/no-node-access
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['audio'], filename, { type: 'audio/mpeg' });
+        Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+        fireEvent.change(fileInput);
+    };
+
+    it('shows an error message in the UI when upload fails', async () => {
+        const { uploadBytes } = require('firebase/storage');
+        uploadBytes.mockRejectedValueOnce(new Error('Storage quota exceeded'));
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        await triggerUpload();
+        expect(await screen.findByText(/Storage quota exceeded/i)).toBeInTheDocument();
+    });
+
+    it('upload error can be dismissed', async () => {
+        const { uploadBytes } = require('firebase/storage');
+        uploadBytes.mockRejectedValueOnce(new Error('Upload failed'));
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        // Dismiss the copyright notice so only one Dismiss button remains when the error appears
+        fireEvent.click(screen.getByTitle('Dismiss'));
+
+        await triggerUpload();
+        expect(await screen.findByText(/Upload failed/i)).toBeInTheDocument();
+
+        fireEvent.click(screen.getByTitle('Dismiss'));
+        expect(screen.queryByText(/Upload failed/i)).not.toBeInTheDocument();
+    });
+
+    it('upload error is cleared when a new upload starts', async () => {
+        const { uploadBytes } = require('firebase/storage');
+        uploadBytes.mockRejectedValueOnce(new Error('First error'));
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        await triggerUpload('first.mp3');
+        expect(await screen.findByText(/First error/i)).toBeInTheDocument();
+
+        // Second upload clears the error before it resolves
+        uploadBytes.mockReturnValueOnce(new Promise(() => {}));
+        await triggerUpload('second.mp3');
+        await waitFor(() => expect(screen.queryByText(/First error/i)).not.toBeInTheDocument());
+    });
+});
+
+// ─── Delete error notification ────────────────────────────────────────────────
+
+describe('LibraryPanel — delete error notification', () => { // [NFR-007]
+    const singleUpload = {
+        id: 'upload_1',
+        data: () => ({
+            title: 'Song To Delete',
+            artistName: 'Artist',
+            downloadUrl: 'https://cdn.example/song.mp3',
+            storagePath: 'uploads/uid_123/song.mp3',
+        }),
+    };
+
+    it('shows an error message in the UI when delete fails', async () => {
+        const { deleteObject } = require('firebase/storage');
+        deleteObject.mockRejectedValueOnce(new Error('Permission denied'));
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: (cb) => cb(singleUpload) }); });
+
+        fireEvent.click(screen.getByTitle('Delete file'));
+        expect(await screen.findByText(/Permission denied/i)).toBeInTheDocument();
+    });
+
+    it('delete error can be dismissed', async () => {
+        const { deleteObject } = require('firebase/storage');
+        deleteObject.mockRejectedValueOnce(new Error('Delete failed'));
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: (cb) => cb(singleUpload) }); });
+
+        // Dismiss copyright notice so only one Dismiss button remains when the error appears
+        fireEvent.click(screen.getByTitle('Dismiss'));
+
+        fireEvent.click(screen.getByTitle('Delete file'));
+        expect(await screen.findByText(/Delete failed/i)).toBeInTheDocument();
+
+        fireEvent.click(screen.getByTitle('Dismiss'));
+        expect(screen.queryByText(/Delete failed/i)).not.toBeInTheDocument();
+    });
+
+    it('delete error is cleared when a new delete starts', async () => {
+        const { deleteObject } = require('firebase/storage');
+        deleteObject.mockRejectedValueOnce(new Error('First delete error'));
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: (cb) => cb(singleUpload) }); });
+
+        fireEvent.click(screen.getByTitle('Delete file'));
+        expect(await screen.findByText(/First delete error/i)).toBeInTheDocument();
+
+        // Second delete attempt clears the error
+        deleteObject.mockResolvedValueOnce();
+        const { deleteDoc } = require('firebase/firestore');
+        deleteDoc.mockResolvedValueOnce();
+        fireEvent.click(screen.getByTitle('Delete file'));
+        await waitFor(() => expect(screen.queryByText(/First delete error/i)).not.toBeInTheDocument());
+    });
+});
+
+// ─── parseFilename fallback ────────────────────────────────────────────────────
+
+describe('LibraryPanel — parseFilename fallback', () => { // [FR-022]
+    beforeEach(() => {
+        const { readId3Tags } = require('../utils/helpers');
+        readId3Tags.mockResolvedValue({ title: null, artist: null, albumArtBlob: null });
+        global.fetch = jest.fn().mockResolvedValue({ ok: false }); // both APIs fail by default
+    });
+    afterEach(() => { delete global.fetch; });
+
+    const triggerUpload = async (filename = 'artist - song.mp3') => {
+        // eslint-disable-next-line testing-library/no-node-access
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['audio'], filename, { type: 'audio/mpeg' });
+        Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+        fireEvent.change(fileInput);
+    };
+
+    it('calls /api/parseFilename when fingerprinting returns no result', async () => {
+        const { uploadBytes, getDownloadURL } = require('firebase/storage');
+        uploadBytes.mockResolvedValueOnce({});
+        getDownloadURL.mockResolvedValueOnce('https://cdn.example/track.mp3');
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        await triggerUpload('artist - song.mp3');
+        await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(
+            '/api/parseFilename',
+            expect.objectContaining({ method: 'POST' })
+        ));
+    });
+
+    it('uses parseFilename result for title and artist when fingerprinting fails', async () => {
+        const { uploadBytes, getDownloadURL } = require('firebase/storage');
+        const { addDoc } = require('firebase/firestore');
+        uploadBytes.mockResolvedValueOnce({});
+        getDownloadURL.mockResolvedValueOnce('https://cdn.example/track.mp3');
+        global.fetch = jest.fn()
+            .mockResolvedValueOnce({ ok: false }) // fingerprinting fails
+            .mockResolvedValueOnce({              // parseFilename succeeds
+                ok: true,
+                json: async () => ({ result: { title: 'Parsed Title', artist: 'Parsed Artist' } }),
+            });
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        await triggerUpload('unknown.mp3');
+        await waitFor(() => expect(addDoc).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({ title: 'Parsed Title', artistName: 'Parsed Artist' })
+        ));
+    });
+
+    it('falls back to filename stem when both fingerprinting and parseFilename fail', async () => {
+        const { uploadBytes, getDownloadURL } = require('firebase/storage');
+        const { addDoc } = require('firebase/firestore');
+        uploadBytes.mockResolvedValueOnce({});
+        getDownloadURL.mockResolvedValueOnce('https://cdn.example/track.mp3');
+        global.fetch = jest.fn().mockResolvedValue({ ok: false }); // both fail
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        await triggerUpload('my-special-track.mp3');
+        await waitFor(() => expect(addDoc).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({ title: 'my-special-track' })
+        ));
+    });
+});
+
+// ─── Upload metadata structure (FR-008) ───────────────────────────────────────
+
+describe('LibraryPanel — upload metadata structure', () => { // [FR-008]
+    beforeEach(() => {
+        const { readId3Tags } = require('../utils/helpers');
+        readId3Tags.mockResolvedValue({ title: 'Song', artist: 'Artist', albumArtBlob: null });
+        global.fetch = jest.fn().mockResolvedValue({ ok: false });
+    });
+    afterEach(() => { delete global.fetch; });
+
+    it('saves only URL references and metadata to Firestore — no raw audio binary', async () => {
+        const { uploadBytes, getDownloadURL } = require('firebase/storage');
+        const { addDoc } = require('firebase/firestore');
+        uploadBytes.mockResolvedValueOnce({});
+        getDownloadURL.mockResolvedValueOnce('https://cdn.example/audio.mp3');
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        // eslint-disable-next-line testing-library/no-node-access
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['audio data bytes'], 'song.mp3', { type: 'audio/mpeg' });
+        Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+        fireEvent.change(fileInput);
+
+        await waitFor(() => expect(addDoc).toHaveBeenCalled());
+        const savedData = addDoc.mock.calls[0][1];
+        // Download URL is a string reference, not binary audio data
+        expect(typeof savedData.downloadUrl).toBe('string');
+        // No raw file binary fields present
+        expect(savedData).not.toHaveProperty('audioFile');
+        expect(savedData).not.toHaveProperty('audioData');
+        expect(savedData).not.toHaveProperty('audioBuffer');
+        expect(savedData).not.toHaveProperty('fileContents');
+    });
+});
+
+// ─── Data privacy during upload (NFR-002) ─────────────────────────────────────
+
+describe('LibraryPanel -- data privacy during upload', () => { // [NFR-002]
+    beforeEach(() => {
+        const { readId3Tags } = require('../utils/helpers');
+        readId3Tags.mockResolvedValue({ title: null, artist: null, albumArtBlob: null });
+        global.fetch = jest.fn().mockResolvedValue({ ok: false });
+    });
+    afterEach(() => { delete global.fetch; });
+
+    it('only calls internal proxy routes during upload -- no direct third-party API calls', async () => {
+        const { uploadBytes, getDownloadURL } = require('firebase/storage');
+        uploadBytes.mockResolvedValueOnce({});
+        getDownloadURL.mockResolvedValueOnce('https://cdn.example/track.mp3');
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        // eslint-disable-next-line testing-library/no-node-access
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['audio'], 'track.mp3', { type: 'audio/mpeg' });
+        Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+        fireEvent.change(fileInput);
+
+        await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+        const allowedRoutes = ['/api/identifyTrack', '/api/parseFilename'];
+        const allUrls = global.fetch.mock.calls.map(call => call[0]);
+        expect(allUrls.every(url => allowedRoutes.includes(url))).toBe(true);
+    });
+
+    it('does not send audio data to any URL outside the internal proxy', async () => {
+        const { uploadBytes, getDownloadURL } = require('firebase/storage');
+        uploadBytes.mockResolvedValueOnce({});
+        getDownloadURL.mockResolvedValueOnce('https://cdn.example/track.mp3');
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        // eslint-disable-next-line testing-library/no-node-access
+        const fileInput = document.querySelector('input[type="file"]');
+        const file = new File(['audio'], 'track.mp3', { type: 'audio/mpeg' });
+        Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+        fireEvent.change(fileInput);
+
+        await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+
+        // No call goes to an absolute external URL
+        const allUrls = global.fetch.mock.calls.map(call => call[0]);
+        expect(allUrls.every(url => !url.startsWith('http'))).toBe(true);
     });
 });

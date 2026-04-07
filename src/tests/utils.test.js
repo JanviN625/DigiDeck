@@ -1,3 +1,5 @@
+// Requirements: [FR-002] [FR-005] [FR-016] [FR-017] [FR-021] [FR-023] [FR-024] [NFR-003]
+
 import { renderHook, act } from '@testing-library/react';
 import { DEFAULT_SETTINGS, matchesKeybind, formatKeybind, useSettings } from '../utils/useSettings';
 import {
@@ -46,7 +48,7 @@ beforeEach(() => {
 
 // ─── DEFAULT_SETTINGS ─────────────────────────────────────────────────────────
 
-describe('DEFAULT_SETTINGS shape', () => {
+describe('DEFAULT_SETTINGS shape', () => { // [NFR-003]
     it('exports a DEFAULT_SETTINGS object', () => {
         expect(DEFAULT_SETTINGS).toBeDefined();
         expect(typeof DEFAULT_SETTINGS).toBe('object');
@@ -358,7 +360,7 @@ describe('getUniqueTrackName', () => {
 
 // ─── readId3Tags ──────────────────────────────────────────────────────────────
 
-describe('readId3Tags', () => {
+describe('readId3Tags', () => { // [FR-016] [FR-022]
     it('returns title and artist when metadata contains both', async () => {
         const { parseBlob } = await import('music-metadata-browser');
         parseBlob.mockResolvedValueOnce({
@@ -430,7 +432,7 @@ const makeSpotifyTrack = (name) => ({
     album: { images: [{ url: 'http://img.example' }] },
 });
 
-describe('spotifyConfirmMatch', () => {
+describe('spotifyConfirmMatch', () => { // [FR-021]
     it('returns null when spotifyResults is empty', () => {
         expect(spotifyConfirmMatch('My Song', [])).toBeNull();
     });
@@ -490,7 +492,7 @@ describe('spotifyConfirmMatch', () => {
 
 const TRACK_ID = 'track_abc';
 
-describe('useAudioEngine — delegation', () => {
+describe('useAudioEngine — delegation', () => { // [FR-002] [FR-005] [FR-017] [FR-024]
     it('play delegates to AudioEngine.play with trackId', () => {
         const { result } = renderHook(() => useAudioEngine(TRACK_ID));
         result.current.play();
