@@ -98,8 +98,22 @@ export function AppProviders({ children }) {
     // Start with defaults — auth hasn't resolved yet, so we never speculatively
     // load from localStorage here. The onAuthStateChanged effect below loads the
     // correct user-scoped workspace once we know who is signed in.
-    const [tracks, setTracks] = useState(DEFAULT_TRACKS);
+    const [tracks, setTracksState] = useState(DEFAULT_TRACKS);
     
+    // Live reference to tracks that bypasses React render cycle
+    const tracksRef = useRef(DEFAULT_TRACKS);
+    
+    // Wrapper around setTracks to maintain synchronous ref
+    const setTracks = useCallback((action) => {
+        setTracksState(prev => {
+            const next = typeof action === 'function' ? action(prev) : action;
+            tracksRef.current = next;
+            return next;
+        });
+    }, []);
+    
+    const getLiveTracks = useCallback(() => tracksRef.current, []);
+
     // Undo / Redo State
     const [historyState, setHistoryState] = useState({
         list: [DEFAULT_TRACKS],
@@ -138,7 +152,7 @@ export function AppProviders({ children }) {
             }
         });
         return () => unsubscribe();
-    }, []);
+    }, [setTracks]);
 
     // Debounced workspace persistence — keyed by UID so accounts never share data.
     // Skipped entirely when no user is authenticated.
@@ -175,7 +189,7 @@ export function AppProviders({ children }) {
             }
             return prev;
         });
-    }, []);
+    }, [setTracks]);
 
     const handleRedo = useCallback(() => {
         setHistoryState(prev => {
@@ -186,14 +200,14 @@ export function AppProviders({ children }) {
             }
             return prev;
         });
-    }, []);
+    }, [setTracks]);
 
     const commitCurrentState = useCallback(() => {
         setTracks(prev => {
             commitHistory(prev);
             return prev;
         });
-    }, [commitHistory]);
+    }, [commitHistory, setTracks]);
 
     // ─── Track Mutators ─────────────────────────────────────────────────────────
 
@@ -222,13 +236,12 @@ export function AppProviders({ children }) {
                 }
             }
 
-            const uniqueBaseSongs = new Set(prev.map(t => t.sourceId || t.id));
             const isNewBaseSong = !trackData.sourceId;
 
             // At capacity — show error and bail out without mutating state.
-            if (isNewBaseSong && uniqueBaseSongs.size >= 5) {
+            if (isNewBaseSong && prev.length >= 5) {
                 setTimeout(() => {
-                    setTrackLimitError("Cannot add track: Maximum limit of 5 distinct songs reached.");
+                    setTrackLimitError("Cannot add track: Maximum limit of 5 tracks reached.");
                     setTimeout(() => setTrackLimitError(null), 3500);
                 }, 0);
                 return prev;
@@ -258,7 +271,7 @@ export function AppProviders({ children }) {
 
             return [...prev, newTrack];
         });
-    }, []);
+    }, [setTracks]);
 
     // All mutators use the functional setState form so they never close over a
     // stale `tracks` snapshot and their references stay stable across re-renders
@@ -272,13 +285,12 @@ export function AppProviders({ children }) {
             if (trackIndex === -1) return prev;
 
             const src = prev[trackIndex];
-            const uniqueBaseSongs = new Set(prev.map(t => t.sourceId || t.id));
             const baseId = src.sourceId || src.id;
 
-            // If it's a completely new base song (unlikely for duplicates), enforce limit
-            if (!uniqueBaseSongs.has(baseId) && uniqueBaseSongs.size >= 5) {
+            // Enforce hard cap count of 5 total tracks
+            if (prev.length >= 5) {
                 setTimeout(() => {
-                    setTrackLimitError("Cannot duplicate: Maximum limit of 5 distinct songs reached.");
+                    setTrackLimitError("Cannot duplicate: Maximum limit of 5 tracks reached.");
                     setTimeout(() => setTrackLimitError(null), 3500);
                 }, 0);
                 return prev;
@@ -298,7 +310,7 @@ export function AppProviders({ children }) {
             if (!skipHistory) commitHistory(next);
             return next;
         });
-    }, [commitHistory]);
+    }, [commitHistory, setTracks]);
 
     const handleDeleteTrack = useCallback((idToRemove, skipHistory = false) => {
         setTracks(prev => {
@@ -306,7 +318,7 @@ export function AppProviders({ children }) {
             if (!skipHistory) commitHistory(next);
             return next;
         });
-    }, [commitHistory]);
+    }, [commitHistory, setTracks]);
 
     const handleMoveTrack = useCallback((fromIndex, toIndex, skipHistory = false) => {
         setTracks(prev => {
@@ -317,7 +329,7 @@ export function AppProviders({ children }) {
             if (!skipHistory) commitHistory(next);
             return next;
         });
-    }, [commitHistory]);
+    }, [commitHistory, setTracks]);
 
     const handleUpdateTrack = useCallback((idToUpdate, updates, skipHistory = false) => {
         setTracks(prev => {
@@ -327,7 +339,7 @@ export function AppProviders({ children }) {
             if (!skipHistory) commitHistory(next);
             return next;
         });
-    }, [commitHistory]);
+    }, [commitHistory, setTracks]);
 
     const handleUpdateTrackDuration = useCallback((trackId, duration, skipHistory = true) => {
         setTracks(prev => {
@@ -335,7 +347,7 @@ export function AppProviders({ children }) {
             if (!skipHistory) commitHistory(next);
             return next;
         });
-    }, [commitHistory]);
+    }, [commitHistory, setTracks]);
 
     const handleClearAllTracks = useCallback((skipHistory = false) => {
         setTracks(prev => {
@@ -343,14 +355,14 @@ export function AppProviders({ children }) {
             if (!skipHistory) commitHistory(next);
             return next;
         });
-    }, [commitHistory]);
+    }, [commitHistory, setTracks]);
 
     const handleOverwriteTracks = useCallback((newTracksArray, skipHistory = false) => {
         setTracks(prev => {
             if (!skipHistory) commitHistory(newTracksArray);
             return newTracksArray;
         });
-    }, [commitHistory]);
+    }, [commitHistory, setTracks]);
 
     const masterDuration = useMemo(() => {
         if (!tracks.length) return 0;
@@ -384,7 +396,7 @@ export function AppProviders({ children }) {
 
     return (
         <SpotifyContext.Provider value={{ ...SpotifyService }}>
-            <MixContext.Provider value={{ tracks, handleAddTrack, handleDuplicateTrack, handleDeleteTrack, handleMoveTrack, handleUpdateTrack, handleUpdateTrackDuration, handleClearAllTracks, handleOverwriteTracks, trackLimitError, setTrackLimitError, storageError, universalIsPlaying, setUniversalIsPlaying, masterStopSignal, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleUndo, handleRedo, commitCurrentState, canUndo: historyState.index > 0, canRedo: historyState.index < historyState.list.length - 1 }}>
+            <MixContext.Provider value={{ tracks, getLiveTracks, handleAddTrack, handleDuplicateTrack, handleDeleteTrack, handleMoveTrack, handleUpdateTrack, handleUpdateTrackDuration, handleClearAllTracks, handleOverwriteTracks, trackLimitError, setTrackLimitError, storageError, universalIsPlaying, setUniversalIsPlaying, masterStopSignal, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleUndo, handleRedo, commitCurrentState, canUndo: historyState.index > 0, canRedo: historyState.index < historyState.list.length - 1 }}>
                 {children}
             </MixContext.Provider>
         </SpotifyContext.Provider>

@@ -144,6 +144,7 @@ export default function TrackCard({
     const [segments, setSegments] = useState(() => initialSegments ?? [makeDefaultSegment(0)]);
     const [activeSegmentId, setActiveSegmentId] = useState(() => (initialSegments ?? [makeDefaultSegment(0)])[0]?.id ?? 0);
     const [g6Dismissed, setG6Dismissed] = useState(false);
+    const [audioDropped, setAudioDropped] = useState(false);
     const [isAnalysing, setIsAnalysing] = useState(false);
     const [eqLow, setEqLow] = useState(0);
     const [eqMid, setEqMid] = useState(0);
@@ -169,6 +170,15 @@ export default function TrackCard({
     const effectsRef = useRef([]);
     const activateSegmentRef = useRef(null);
     const playWaitTimerRef = useRef(null);
+
+    // Show audio drop warning if triggered by Engine
+    useEffect(() => {
+        const handler = (e) => {
+            if (e.detail.trackId === trackId) setAudioDropped(true);
+        };
+        window.addEventListener('audio-drop', handler);
+        return () => window.removeEventListener('audio-drop', handler);
+    }, [trackId]);
 
     // Re-show the missing warning if the file is deleted again after being restored
     useEffect(() => { if (isMissing) setMissingDismissed(false); }, [isMissing]);
@@ -1634,7 +1644,7 @@ export default function TrackCard({
                                      Once dismissed on this card it never reappears, regardless of
                                      value changes. Each card tracks dismissal independently. */}
                                 {!g6Dismissed && (Math.abs(pitch) > 3 || parseFloat(speed) < 0.85 || parseFloat(speed) > 1.15) && (
-                                    <div className="flex items-center gap-2 bg-base-800 border border-base-400/60 rounded-lg px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                                    <div className="flex items-center gap-2 bg-base-800 border border-base-400/60 rounded-lg px-3 py-2 mt-4" onClick={(e) => e.stopPropagation()}>
                                         <AlertTriangle size={11} className="text-amber-400/80 shrink-0" />
                                         <span className="text-[10px] text-base-300 leading-snug flex-1">
                                             Audible artefacts may occur at this setting:{' '}
@@ -1651,6 +1661,19 @@ export default function TrackCard({
                                             title="Dismiss warning"
                                         >
                                             <X size={12} />
+                                        </button>
+                                    </div>
+                                )}
+
+                                {audioDropped && (
+                                    <div className="flex items-center gap-2 bg-orange-900/20 border border-orange-500/30 rounded-lg px-3 py-2 mt-4" onClick={(e) => e.stopPropagation()}>
+                                        <AlertTriangle className="text-orange-400 mt-0.5 shrink-0" size={16} />
+                                        <div className="flex-1">
+                                            <p className="text-xs text-orange-300 font-medium leading-relaxed">Audio Processing Drop</p>
+                                            <p className="text-[10px] text-orange-400/80 mt-1">High CPU load caused an audio buffer underrun. The audio may stutter or drop briefly.</p>
+                                        </div>
+                                        <button onClick={(e) => { e.stopPropagation(); setAudioDropped(false); }} className="text-orange-500 hover:text-orange-300 p-1" title="Dismiss">
+                                            <X size={14} />
                                         </button>
                                     </div>
                                 )}

@@ -35,6 +35,7 @@ const setupMocks = (overrides = {}) => {
     });
     useMix.mockReturnValue({
         tracks: [],
+        getLiveTracks: () => overrides.mix?.tracks ?? [],
         ...(overrides.mix ?? {}),
     });
 };
@@ -61,7 +62,7 @@ const setupAndSend = async (tracks = [], message = 'test') => {
     useFirebaseAuth.mockReturnValue({
         user: { displayName: 'User', email: 'u@test.com', photoURL: null },
     });
-    useMix.mockReturnValue({ tracks });
+    useMix.mockReturnValue({ tracks, getLiveTracks: () => tracks });
 
     render(<AIPanel />);
     await screen.findByPlaceholderText('Ask for track suggestions…');
@@ -794,7 +795,7 @@ describe('API call parameters', () => { // [FR-013] [NFR-001]
         const { useFirebaseAuth } = require('../firebase/firebase');
         const { useMix } = require('../spotify/appContext');
         useFirebaseAuth.mockReturnValue({ user: { displayName: 'U', email: 'u@t.com', photoURL: null } });
-        useMix.mockReturnValue({ tracks: [] });
+        useMix.mockReturnValue({ tracks: [], getLiveTracks: () => [] });
 
         render(<AIPanel />);
         await screen.findByPlaceholderText('Ask for track suggestions…');

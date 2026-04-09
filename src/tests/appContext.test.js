@@ -253,13 +253,18 @@ describe('handleDuplicateTrack', () => {
         expect(titles.some(t => t.startsWith('Track 1 ('))).toBe(true);
     });
 
-    it('allows duplicating an existing track even at the 5-track count', () => {
+    it('does not allow duplicating an existing track if at the 5-track count limit', () => {
+        jest.useFakeTimers();
         const { result } = renderMix();
         act(() => { for (let i = 3; i <= 5; i++) result.current.handleAddTrack(); });
         const trackId = result.current.tracks[0].id;
         act(() => { result.current.handleDuplicateTrack(trackId, { title: 'Track 1' }); });
-        // Duplicates of existing songs are not blocked by the distinct-song limit
-        expect(result.current.tracks).toHaveLength(6);
+        // Duplicates are now blocked if track boundary limit of 5 is hit
+        expect(result.current.tracks).toHaveLength(5);
+        
+        act(() => { jest.runOnlyPendingTimers(); });
+        expect(result.current.trackLimitError).toBeTruthy();
+        jest.useRealTimers();
     });
 
     it('assigns a new unique id to the duplicate', () => {

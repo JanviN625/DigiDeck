@@ -188,7 +188,17 @@ export default function LibraryPanel() {
                 createdAt: timestamp,
             };
             if (resolvedSpotifyTrackId) docData.spotifyTrackId = resolvedSpotifyTrackId;
-            await addDoc(collection(db, `users/${currentUser.uid}/uploads`), docData);
+            
+            try {
+                await addDoc(collection(db, `users/${currentUser.uid}/uploads`), docData);
+            } catch (firestoreError) {
+                // Rollback storage blobs if DB write fails
+                try { await deleteObject(storageRef); } catch (e) {}
+                if (albumArtBlob) {
+                    try { const coverRef = ref(storage, `uploads/${currentUser.uid}/${timestamp}_cover`); await deleteObject(coverRef); } catch (e) {}
+                }
+                throw new Error("Metadata save failed. Upload rolled back.");
+            }
 
             // 8. Restore any workspace tracks that were waiting for this exact file
             const missingTracks = tracks.filter(t => t.isMissing && t.localFileName === file.name);

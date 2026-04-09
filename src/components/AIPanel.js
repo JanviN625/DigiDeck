@@ -218,7 +218,7 @@ function MarkdownMessage({ content }) {
 // ─── AIPanel ─────────────────────────────────────────────────────────────────
 
 export default function AIPanel() {
-    const { tracks } = useMix();
+    const { tracks, getLiveTracks } = useMix();
     const { user } = useFirebaseAuth();
     const displayName = user?.displayName || user?.email || 'User';
     const avatarSrc   = user?.photoURL || null;
@@ -366,7 +366,7 @@ export default function AIPanel() {
                     body: JSON.stringify({
                         model: 'claude-haiku-4-5',
                         max_tokens: 1024,
-                        system: buildSystemPrompt(tracks),
+                        system: buildSystemPrompt(getLiveTracks()),
                         messages: apiMessages.slice(-20),
                     }),
                 });
@@ -379,12 +379,18 @@ export default function AIPanel() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         messages: apiMessages.slice(-20),
-                        systemPrompt: buildSystemPrompt(tracks),
+                        systemPrompt: buildSystemPrompt(getLiveTracks()),
                     }),
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
                 replyText = data.content;
+            }
+
+            // Block actionable JSON-like objects to enforce safety
+            const actionRegex = /\{[\s\S]*"?(speed|pitch|eqLow|action|tool_use|update|command)"?\s*:/i;
+            if (actionRegex.test(replyText) || /\{[^{}]*\}/.test(replyText)) {
+                replyText = "Blocked actionable command from AI. The system has prevented structural command execution.";
             }
 
             const finalMessages = [...updated, { role: 'assistant', content: replyText, capturedAt: Date.now() }];
