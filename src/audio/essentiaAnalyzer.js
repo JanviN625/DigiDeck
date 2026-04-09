@@ -52,19 +52,49 @@ function processQueue() {
     getWorker().postMessage({ type: 'analyze', audioData, sampleRate });
 }
 
+const ANALYSIS_TIMEOUT_MS = 30000;
+
 export async function analyzeAudioBuffer(audioBuffer) {
     return new Promise((resolve, reject) => {
         const audioData = audioBuffer.getChannelData(0);
         const sampleRate = audioBuffer.sampleRate;
 
+        let settled = false;
+
+        const timeoutId = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            // Clear active callbacks so the worker response is ignored harmlessly
+            if (activeResolve === wrappedResolve) {
+                activeResolve = null;
+                activeReject = null;
+                processQueue();
+            }
+            reject(new Error('Essentia analysis timed out after 30s'));
+        }, ANALYSIS_TIMEOUT_MS);
+
+        const wrappedResolve = (result) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            resolve(result);
+        };
+
+        const wrappedReject = (err) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            reject(err);
+        };
+
         if (!activeResolve) {
             // Worker is idle — dispatch immediately
-            activeResolve = resolve;
-            activeReject = reject;
+            activeResolve = wrappedResolve;
+            activeReject = wrappedReject;
             getWorker().postMessage({ type: 'analyze', audioData, sampleRate });
         } else {
             // Worker is busy — queue for after current job finishes
-            queue.push({ audioData, sampleRate, resolve, reject });
+            queue.push({ audioData, sampleRate, resolve: wrappedResolve, reject: wrappedReject });
         }
     });
 }

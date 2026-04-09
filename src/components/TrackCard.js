@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, EyeOff, Move, Copy, Trash2, RotateCcw, AlertTriangle, X, Plus, Power } from 'lucide-react';
 import { Slider } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
+import { EFFECT_CONFIGS } from '../utils/trackConfig';
 import { useAudioEngine } from '../audio/useAudioEngine';
 import AudioEngineService, { audioBufferToWAV } from '../audio/AudioEngine';
 import WaveSurfer from 'wavesurfer.js';
@@ -62,58 +63,7 @@ function FadeField({ label, value, onChange, onReset }) {
 }
 
 
-const EFFECT_CONFIGS = {
-    volume: {
-        label: 'Volume',
-        defaultParams: { gain: 1.0 },
-        paramDefs: [
-            { key: 'gain', label: 'Gain', min: 0, max: 2, step: 0.01, unit: 'x' },
-        ],
-    },
-    filter: {
-        label: 'Pass Filter',
-        defaultParams: { filterType: 'highpass', frequency: 300 },
-        paramDefs: [
-            { key: 'filterType', label: 'Type', type: 'select', options: [
-                { value: 'highpass', label: 'High-pass' },
-                { value: 'lowpass',  label: 'Low-pass'  },
-            ]},
-            { key: 'frequency', label: 'Cutoff', min: 20, max: 20000, step: 1, unit: 'Hz' },
-        ],
-    },
-    panner: {
-        label: 'Stereo Pan',
-        defaultParams: { pan: 0 },
-        paramDefs: [
-            { key: 'pan', label: 'Pan', min: -1, max: 1, step: 0.01 },
-        ],
-    },
-    reverb: {
-        label: 'Reverb',
-        defaultParams: { mix: 0.3 },
-        paramDefs: [
-            { key: 'mix', label: 'Mix', min: 0, max: 1, step: 0.01 },
-        ],
-    },
-    delay: {
-        label: 'Delay',
-        defaultParams: { time: 0.25, feedback: 0.3, mix: 0.5 },
-        paramDefs: [
-            { key: 'time', label: 'Time', min: 0, max: 1, step: 0.01, unit: 's' },
-            { key: 'feedback', label: 'Feedback', min: 0, max: 0.95, step: 0.01 },
-            { key: 'mix', label: 'Mix', min: 0, max: 1, step: 0.01 },
-        ],
-    },
-    compressor: {
-        label: 'Compressor',
-        defaultParams: { threshold: -24, ratio: 4, knee: 10 },
-        paramDefs: [
-            { key: 'threshold', label: 'Threshold', min: -60, max: 0, step: 1, unit: 'dB' },
-            { key: 'ratio', label: 'Ratio', min: 1, max: 20, step: 0.5, unit: ':1' },
-            { key: 'knee', label: 'Knee', min: 0, max: 40, step: 1, unit: 'dB' },
-        ],
-    },
-};
+// EFFECT_CONFIGS is imported from ../utils/trackConfig — shared with AIPanel's system prompt
 
 const makeDefaultSegment = (id, startPct = 0, endPct = 1) => ({
     id, startPct, endPct,

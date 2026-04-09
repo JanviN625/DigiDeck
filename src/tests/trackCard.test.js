@@ -1,7 +1,7 @@
 // Requirements: [FR-001] [FR-002] [FR-005] [FR-014] [FR-017] [FR-018] [FR-023] [FR-024] [FR-026]
 
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import TrackCard from '../components/TrackCard';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -37,18 +37,22 @@ jest.mock('../audio/AudioEngine', () => ({
 }));
 
 // Plain object (not jest.fn) so resetMocks:true cannot clear it.
-jest.mock('wavesurfer.js', () => {
-    const ws = {
-        on: () => ws,
-        load: () => {},
-        destroy: () => {},
-        zoom: () => {},
-        seekTo: () => {},
-        getCurrentTime: () => 0,
-        getDuration: () => 180,
-    };
-    return { __esModule: true, default: { create: () => ws } };
-});
+// Callbacks are stored so tests can fire 'ready' to put TrackCard into a fully-loaded state.
+const _wsCallbacks = {};
+const _ws = {
+    on: (event, cb) => { _wsCallbacks[event] = cb; return _ws; },
+    load: () => { _wsCallbacks.ready?.(); },
+    loadBlob: () => { _wsCallbacks.ready?.(); },
+    destroy: () => {},
+    zoom: () => {},
+    seekTo: () => {},
+    getCurrentTime: () => 90,   // mid-track position (90s into a 180s track → 50%)
+    getDuration: () => 180,
+};
+jest.mock('wavesurfer.js', () => ({
+    __esModule: true,
+    default: { create: () => _ws },
+}));
 
 jest.mock('../audio/essentiaAnalyzer', () => ({
     analyzeAudioBuffer: jest.fn().mockResolvedValue({
@@ -978,5 +982,106 @@ describe('TrackCard — waveform', () => { // [FR-026]
         // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
         const waveformTarget = container.querySelector('.absolute.inset-0');
         expect(waveformTarget).toBeInTheDocument();
+    });
+});
+
+// ─── TrackCard — segment split (FR-018) ──────────────────────────────────────
+
+describe('TrackCard — segment split', () => {
+    const splitProps = {
+        ...defaultProps,
+        audioUrl: 'blob:mock-audio',
+        initiallyExpanded: true,
+        // Single default segment covering the full track
+        initialSegments: [{ id: 0, startPct: 0, endPct: 1, pitch: 0, speed: 1.0, fadeIn: 0, fadeOut: 0, eqLow: 0, eqMid: 0, eqHigh: 0, eqKills: { low: false, mid: false, high: false }, effects: [] }],
+    };
+
+    beforeEach(() => {
+        // Override fetch to resolve so loadAndInit can complete its async chain.
+        // The top-level beforeEach sets fetch to a never-resolving promise, which
+        // prevents WaveSurfer from being created and waveformReadyRef from being set.
+        global.fetch = jest.fn().mockResolvedValue({
+            arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)),
+        });
+        // resetMocks:true clears the mockResolvedValue from the jest.mock factory,
+        // so we re-establish it here to prevent analyzeAudioBuffer().then() from throwing.
+        const { analyzeAudioBuffer } = require('../audio/essentiaAnalyzer');
+        analyzeAudioBuffer.mockResolvedValue({ bpm: 120, key: 'C', scale: 'major', beatPositions: [] });
+    });
+
+    // Fire the splitAtPlayhead keybind (Ctrl+S default) while hovering the card.
+    const fireSplit = (container) => {
+        // TrackCard renders <div className="relative"><div onMouseEnter=...>.
+        // The onMouseEnter is on the inner div (firstChild.firstChild), not the outer wrapper.
+        // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
+        const lane = container.firstChild.firstChild;
+        fireEvent.mouseEnter(lane);
+        fireEvent.keyDown(window, { key: 's', ctrlKey: true, shiftKey: false, altKey: false });
+    };
+
+    it('calls handleUpdateTrack with initialSegments when split fires at mid-track', async () => {
+        // WaveSurfer mock returns getCurrentTime() = 90, getDuration() = 180 → 50% split
+        const { container } = render(<TrackCard {...splitProps} />);
+        // The analysis call (handleUpdateTrack with beatPositions) is a reliable signal that
+        // loadAndInit completed and WaveSurfer is ready (ready fires before the analysis callback).
+        await waitFor(() => expect(mockHandleUpdateTrack).toHaveBeenCalled(), { timeout: 2000 });
+        mockHandleUpdateTrack.mockClear(); // clear the analysis call so we isolate the split call
+        await act(async () => { fireSplit(container); });
+
+        expect(mockHandleUpdateTrack).toHaveBeenCalledWith(
+            'track_1',
+            expect.objectContaining({
+                initialSegments: expect.any(Array),
+            })
+        );
+    });
+
+    it('splits one segment into two at the 50% point', async () => {
+        const { container } = render(<TrackCard {...splitProps} />);
+        await waitFor(() => expect(mockHandleUpdateTrack).toHaveBeenCalled(), { timeout: 2000 });
+        mockHandleUpdateTrack.mockClear();
+        await act(async () => { fireSplit(container); });
+
+        const call = mockHandleUpdateTrack.mock.calls.find(c => c[1]?.initialSegments);
+        expect(call).toBeTruthy(); // split must have fired
+        const segments = call[1].initialSegments;
+        expect(segments).toHaveLength(2);
+        expect(segments[0].startPct).toBe(0);
+        expect(segments[0].endPct).toBeCloseTo(0.5, 5);
+        expect(segments[1].startPct).toBeCloseTo(0.5, 5);
+        expect(segments[1].endPct).toBe(1);
+    });
+
+    it('does not split when the playhead is at position 0 (boundary guard)', () => {
+        // Temporarily override getCurrentTime to return 0
+        const origGet = _ws.getCurrentTime;
+        _ws.getCurrentTime = () => 0;
+
+        const { container } = render(<TrackCard {...splitProps} />);
+        fireSplit(container);
+
+        const splitCalls = mockHandleUpdateTrack.mock.calls.filter(c => c[1]?.initialSegments);
+        expect(splitCalls).toHaveLength(0);
+
+        _ws.getCurrentTime = origGet;
+    });
+
+    it('does not split when the card is not hovered', () => {
+        render(<TrackCard {...splitProps} />);
+        // Fire keybind WITHOUT mouseEnter — isHoveredRef stays false
+        fireEvent.keyDown(window, { key: 's', ctrlKey: true, shiftKey: false, altKey: false });
+
+        const splitCalls = mockHandleUpdateTrack.mock.calls.filter(c => c[1]?.initialSegments);
+        expect(splitCalls).toHaveLength(0);
+    });
+
+    it('does not split when the track has no audioUrl', () => {
+        const { container } = render(<TrackCard {...defaultProps} initiallyExpanded={true} />);
+        // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
+        fireEvent.mouseEnter(container.firstChild);
+        fireEvent.keyDown(window, { key: 's', ctrlKey: true, shiftKey: false, altKey: false });
+
+        const splitCalls = mockHandleUpdateTrack.mock.calls.filter(c => c[1]?.initialSegments);
+        expect(splitCalls).toHaveLength(0);
     });
 });

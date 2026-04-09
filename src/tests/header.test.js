@@ -1,4 +1,4 @@
-// Requirements: [FR-003] [FR-004] [FR-009] [FR-015] [NFR-003] [NFR-004] [NFR-009]
+// Requirements: [FR-003] [FR-004] [FR-009] [FR-015] [FR-028] [NFR-003] [NFR-004] [NFR-009]
 
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -8,6 +8,16 @@ import Header from '../components/Header';
 
 jest.mock('../firebase/firebase', () => ({
     useFirebaseAuth: jest.fn(),
+}));
+
+jest.mock('../firebase/FirebaseService', () => ({
+    __esModule: true,
+    default: {
+        saveProject: jest.fn(),
+        getUserProjects: jest.fn(),
+        loadProject: jest.fn(),
+        deleteProject: jest.fn(),
+    },
 }));
 
 jest.mock('../spotify/appContext', () => ({
@@ -79,6 +89,7 @@ jest.mock('@heroui/react', () => ({
 const mockSignOut = jest.fn();
 const mockSetUniversalIsPlaying = jest.fn();
 const mockTriggerMasterStop = jest.fn();
+const mockHandleOverwriteTracks = jest.fn();
 
 const setupMocks = (overrides = {}) => {
     const { useFirebaseAuth } = require('../firebase/firebase');
@@ -96,7 +107,7 @@ const setupMocks = (overrides = {}) => {
     });
 
     useFirebaseAuth.mockReturnValue({
-        user: { displayName: 'Test User', email: 'test@test.com', photoURL: null },
+        user: { uid: 'test_uid', displayName: 'Test User', email: 'test@test.com', photoURL: null },
         signOut: mockSignOut,
         ...((overrides.auth) || {}),
     });
@@ -106,6 +117,7 @@ const setupMocks = (overrides = {}) => {
         universalIsPlaying: false,
         setUniversalIsPlaying: mockSetUniversalIsPlaying,
         triggerMasterStop: mockTriggerMasterStop,
+        handleOverwriteTracks: mockHandleOverwriteTracks,
         ...((overrides.mix) || {}),
     });
 };
@@ -282,5 +294,153 @@ describe('Header — Export and Mix Preview', () => { // [NFR-009]
         render(<Header />);
         fireEvent.click(screen.getByText('Export'));
         expect(await screen.findByText('Exporting…')).toBeInTheDocument();
+    });
+});
+
+// ─── Save project (RF4) ──────────────────────────────────────────────────────
+
+describe('Header — Save project', () => { // [FR-028]
+    it('clicking Save calls FirebaseService.saveProject with uid, project name, and tracks', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        FirebaseService.saveProject.mockResolvedValue('untitled');
+
+        setupMocks({ mix: { tracks: [{ id: 1, title: 'Track A' }] } });
+        render(<Header />);
+
+        fireEvent.click(screen.getByText('Save'));
+
+        await waitFor(() => expect(FirebaseService.saveProject).toHaveBeenCalledWith(
+            'test_uid',
+            expect.any(String),
+            expect.any(Array),
+        ));
+    });
+
+    it('shows "Saved!" feedback when saveProject resolves', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        FirebaseService.saveProject.mockResolvedValue('untitled');
+
+        render(<Header />);
+        fireEvent.click(screen.getByText('Save'));
+
+        expect(await screen.findByText('Saved!')).toBeInTheDocument();
+    });
+
+    it('shows "Failed" feedback when saveProject rejects', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        FirebaseService.saveProject.mockRejectedValue(new Error('Firestore unavailable'));
+
+        render(<Header />);
+        fireEvent.click(screen.getByText('Save'));
+
+        expect(await screen.findByText('Failed')).toBeInTheDocument();
+    });
+
+    it('does not call saveProject when there is no authenticated user', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        setupMocks({ auth: { user: null } });
+        render(<Header />);
+
+        fireEvent.click(screen.getByText('Save'));
+
+        // Allow any pending promises to settle
+        await new Promise(r => setTimeout(r, 0));
+        expect(FirebaseService.saveProject).not.toHaveBeenCalled();
+    });
+});
+
+// ─── Load project (RF4) ──────────────────────────────────────────────────────
+
+describe('Header — Load project', () => { // [FR-028]
+    it('clicking Load opens the Load Project modal', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        FirebaseService.getUserProjects.mockResolvedValue([]);
+
+        render(<Header />);
+        fireEvent.click(screen.getByText('Load'));
+
+        expect(await screen.findByText('Load Project')).toBeInTheDocument();
+    });
+
+    it('calls getUserProjects with the user uid when Load is clicked', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        FirebaseService.getUserProjects.mockResolvedValue([]);
+
+        setupMocks({ auth: { user: { uid: 'user_123', displayName: 'Test User', email: 'test@test.com', photoURL: null }, signOut: mockSignOut } });
+        render(<Header />);
+        fireEvent.click(screen.getByText('Load'));
+
+        await waitFor(() => expect(FirebaseService.getUserProjects).toHaveBeenCalledWith('user_123'));
+    });
+
+    it('displays project names returned by getUserProjects', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        FirebaseService.getUserProjects.mockResolvedValue([
+            { id: 'proj-1', name: 'Summer Mix', tracks: [{ id: 1 }] },
+            { id: 'proj-2', name: 'Winter Vibes', tracks: [] },
+        ]);
+
+        render(<Header />);
+        fireEvent.click(screen.getByText('Load'));
+
+        expect(await screen.findByText('Summer Mix')).toBeInTheDocument();
+        expect(await screen.findByText('Winter Vibes')).toBeInTheDocument();
+    });
+
+    it('shows "No saved projects yet." when the list is empty', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        FirebaseService.getUserProjects.mockResolvedValue([]);
+
+        render(<Header />);
+        fireEvent.click(screen.getByText('Load'));
+
+        expect(await screen.findByText('No saved projects yet.')).toBeInTheDocument();
+    });
+
+    it('clicking a project row calls loadProject and closes the modal', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        FirebaseService.getUserProjects.mockResolvedValue([
+            { id: 'proj-1', name: 'Summer Mix', tracks: [{ id: 1 }] },
+        ]);
+        FirebaseService.loadProject.mockResolvedValue({ name: 'Summer Mix', tracks: [{ id: 1 }] });
+
+        setupMocks({ auth: { user: { uid: 'user_123', displayName: 'Test User', email: 'test@test.com', photoURL: null }, signOut: mockSignOut } });
+        render(<Header />);
+        fireEvent.click(screen.getByText('Load'));
+
+        await screen.findByText('Summer Mix');
+        fireEvent.click(screen.getByRole('button', { name: /summer mix/i }));
+
+        await waitFor(() => expect(FirebaseService.loadProject).toHaveBeenCalledWith('user_123', 'proj-1'));
+        // Modal should close after successful load
+        await waitFor(() => expect(screen.queryByText('Load Project')).not.toBeInTheDocument());
+    });
+
+    it('clicking the delete button calls deleteProject and removes the project from the list', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        FirebaseService.getUserProjects.mockResolvedValue([
+            { id: 'proj-1', name: 'Summer Mix', tracks: [] },
+        ]);
+        FirebaseService.deleteProject.mockResolvedValue(undefined);
+
+        setupMocks({ auth: { user: { uid: 'user_123', displayName: 'Test User', email: 'test@test.com', photoURL: null }, signOut: mockSignOut } });
+        render(<Header />);
+        fireEvent.click(screen.getByText('Load'));
+
+        await screen.findByText('Summer Mix');
+        fireEvent.click(screen.getByTitle('Delete project'));
+
+        await waitFor(() => expect(FirebaseService.deleteProject).toHaveBeenCalledWith('user_123', 'proj-1'));
+        await waitFor(() => expect(screen.queryByText('Summer Mix')).not.toBeInTheDocument());
+    });
+
+    it('shows an error message when getUserProjects rejects', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        FirebaseService.getUserProjects.mockRejectedValue(new Error('Firestore unavailable'));
+
+        render(<Header />);
+        fireEvent.click(screen.getByText('Load'));
+
+        expect(await screen.findByText('Failed to load projects.')).toBeInTheDocument();
     });
 });

@@ -108,6 +108,7 @@ export function AppProviders({ children }) {
 
     const [currentUid, setCurrentUid] = useState(null);
     const [trackLimitError, setTrackLimitError] = useState(null);
+    const [storageError, setStorageError] = useState(null);
     const [universalIsPlaying, setUniversalIsPlaying] = useState(false);
     const [masterStopSignal, setMasterStopSignal] = useState(0);
     const [globalZoom, setGlobalZoom] = useState(0);
@@ -146,7 +147,10 @@ export function AppProviders({ children }) {
         const timer = setTimeout(() => {
             try {
                 localStorage.setItem(`digideck_workspace_${currentUid}`, JSON.stringify(tracks));
-            } catch {}
+            } catch {
+                setStorageError('Workspace could not be auto-saved — browser storage may be full.');
+                setTimeout(() => setStorageError(null), 5000);
+            }
         }, 500);
         return () => clearTimeout(timer);
     }, [tracks, currentUid]);
@@ -380,7 +384,7 @@ export function AppProviders({ children }) {
 
     return (
         <SpotifyContext.Provider value={{ ...SpotifyService }}>
-            <MixContext.Provider value={{ tracks, handleAddTrack, handleDuplicateTrack, handleDeleteTrack, handleMoveTrack, handleUpdateTrack, handleUpdateTrackDuration, handleClearAllTracks, handleOverwriteTracks, trackLimitError, setTrackLimitError, universalIsPlaying, setUniversalIsPlaying, masterStopSignal, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleUndo, handleRedo, commitCurrentState, canUndo: historyState.index > 0, canRedo: historyState.index < historyState.list.length - 1 }}>
+            <MixContext.Provider value={{ tracks, handleAddTrack, handleDuplicateTrack, handleDeleteTrack, handleMoveTrack, handleUpdateTrack, handleUpdateTrackDuration, handleClearAllTracks, handleOverwriteTracks, trackLimitError, setTrackLimitError, storageError, universalIsPlaying, setUniversalIsPlaying, masterStopSignal, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleUndo, handleRedo, commitCurrentState, canUndo: historyState.index > 0, canRedo: historyState.index < historyState.list.length - 1 }}>
                 {children}
             </MixContext.Provider>
         </SpotifyContext.Provider>

@@ -69,6 +69,7 @@ const createOfflineCtx = (sampleRate = 44100) => ({
     createDynamicsCompressor: jest.fn(() => createNode()),
     createStereoPanner: jest.fn(() => createNode()),
     createBufferSource: jest.fn(() => createNode()),
+    createBuffer: jest.fn((channels, length, sr) => createMockBuffer(length / sr, sr)),
     startRendering: jest.fn().mockResolvedValue(createMockBuffer(2, sampleRate)),
 });
 
@@ -677,6 +678,61 @@ describe('AudioEngine', () => {
             await AudioEngine.loadTrack('t2', createMockBuffer(3));
             await expect(AudioEngine.renderOffline()).resolves.toBeDefined();
         });
+
+        it('creates OfflineAudioContext with extra 1-second tail for reverb/delay decay', async () => {
+            const buf = createMockBuffer(2); // 2 second buffer
+            await AudioEngine.loadTrack('t1', buf);
+            await AudioEngine.renderOffline();
+            // Expected total samples = ceil(44100 * 2) + 44100 (1s tail)
+            const expectedSamples = Math.ceil(44100 * 2) + 44100;
+            expect(global.OfflineAudioContext).toHaveBeenCalledWith(2, expectedSamples, 44100);
+        });
+
+        it('applies live EQ gain values to the offline EQ nodes', async () => {
+            const buf = createMockBuffer();
+            await AudioEngine.loadTrack('t1', buf);
+            AudioEngine.setEQ('t1', { low: 6, mid: -3, high: 9 });
+
+            const offlineCtxInstance = createOfflineCtx();
+            global.OfflineAudioContext.mockImplementationOnce(() => offlineCtxInstance);
+
+            await AudioEngine.renderOffline();
+
+            // The offline EQ nodes are created via offlineCtx.createBiquadFilter()
+            const filterCalls = offlineCtxInstance.createBiquadFilter.mock.results;
+            const gainValues = filterCalls.map(r => r.value.gain.value);
+            // First three biquad calls are eqLow, eqMid, eqHigh
+            expect(gainValues[0]).toBe(6);
+            expect(gainValues[1]).toBe(-3);
+            expect(gainValues[2]).toBe(9);
+        });
+
+        it('includes enabled effects in the offline chain', async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+            AudioEngine.addEffect('t1', 'reverb');
+
+            const offlineCtxInstance = createOfflineCtx();
+            global.OfflineAudioContext.mockImplementationOnce(() => offlineCtxInstance);
+
+            await AudioEngine.renderOffline();
+
+            // Reverb uses createConvolver — verify it was called in offline context
+            expect(offlineCtxInstance.createConvolver).toHaveBeenCalled();
+        });
+
+        it('skips disabled effects in the offline chain', async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+            const effId = AudioEngine.addEffect('t1', 'reverb');
+            AudioEngine.setEffectEnabled('t1', effId, false);
+
+            const offlineCtxInstance = createOfflineCtx();
+            global.OfflineAudioContext.mockImplementationOnce(() => offlineCtxInstance);
+
+            await AudioEngine.renderOffline();
+
+            // Disabled reverb — createConvolver should NOT be called in offline context
+            expect(offlineCtxInstance.createConvolver).not.toHaveBeenCalled();
+        });
     });
 
     // ─── audioBufferToWAV ───────────────────────────────────────────────────────
@@ -918,6 +974,45 @@ describe('EssentiaAnalyzer', () => { // [FR-023]
             await promise.catch(() => {});
 
             expect(workerRef.terminate).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('analyzeAudioBuffer — timeout (30s)', () => {
+        beforeEach(() => jest.useFakeTimers());
+        afterEach(() => jest.useRealTimers());
+
+        it('rejects with a timeout error if the worker never responds within 30 s', async () => {
+            const mockBuffer = {
+                sampleRate: 44100,
+                getChannelData: jest.fn(() => new Float32Array(10)),
+            };
+
+            const promise = analyzeAudioBuffer(mockBuffer);
+
+            // Advance past the 30-second guard without sending any worker message
+            jest.advanceTimersByTime(30001);
+
+            await expect(promise).rejects.toThrow('Essentia analysis timed out after 30s');
+        });
+
+        it('does not reject if the worker responds before the timeout', async () => {
+            const mockBuffer = {
+                sampleRate: 44100,
+                getChannelData: jest.fn(() => new Float32Array(10)),
+            };
+
+            const promise = analyzeAudioBuffer(mockBuffer);
+
+            // Worker responds at 10 s — well within the 30 s window
+            jest.advanceTimersByTime(10000);
+            mockWorkerInstance.onmessage({
+                data: { type: 'done', bpm: 120, key: 'C', scale: 'major', beatPositions: [] },
+            });
+
+            // Now advance past 30 s — the timeout should have been cleared
+            jest.advanceTimersByTime(25000);
+
+            await expect(promise).resolves.toBeDefined();
         });
     });
 });

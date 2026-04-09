@@ -3,6 +3,7 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import LibraryPanel from '../components/LibraryPanel';
+import PlaylistModal from '../components/PlaylistModal';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -45,18 +46,6 @@ jest.mock('../utils/helpers', () => ({
     getDynamicInputWidth: jest.fn(() => 100),
 }));
 
-// Stub PlaylistModal to avoid its own heavy dependency tree.
-jest.mock('../components/PlaylistModal', () => ({
-    __esModule: true,
-    default: ({ isOpen, onClose, playlist }) =>
-        isOpen ? (
-            <div data-testid="playlist-modal">
-                <span>{playlist?.name}</span>
-                <button onClick={onClose}>Close</button>
-            </div>
-        ) : null,
-}));
-
 jest.mock('@heroui/react', () => ({
     Button: ({ onPress, children, disabled, ...props }) => (
         <button onClick={onPress} disabled={disabled} {...props}>
@@ -69,6 +58,7 @@ jest.mock('@heroui/react', () => ({
 
 const mockGetUserPlaylists = jest.fn();
 const mockSearchSpotify = jest.fn();
+let mockGetPlaylistTracks;
 const mockHandleAddTrack = jest.fn();
 const mockHandleUpdateTrack = jest.fn();
 const mockConnectSpotify = jest.fn();
@@ -94,9 +84,11 @@ const setupMocks = (overrides = {}) => {
     collection.mockImplementation((_db, ...path) => path.join('/'));
     doc.mockImplementation((_db, ...path) => path.join('/'));
 
+    mockGetPlaylistTracks = jest.fn().mockResolvedValue({ items: [] });
     useSpotify.mockReturnValue({
         getUserPlaylists: mockGetUserPlaylists,
         searchSpotify: mockSearchSpotify,
+        getPlaylistTracks: mockGetPlaylistTracks,
     });
 
     useMix.mockReturnValue({
@@ -275,14 +267,14 @@ describe('LibraryPanel — Spotify section (connected)', () => {
     it('clicking a playlist opens the PlaylistModal', async () => {
         render(<LibraryPanel />);
         fireEvent.click(await screen.findByText('Playlist One'));
-        expect(screen.getByTestId('playlist-modal')).toBeInTheDocument();
+        expect(await screen.findByTitle('Close Modal')).toBeInTheDocument();
     });
 
     it('closing PlaylistModal hides it', async () => {
         render(<LibraryPanel />);
         fireEvent.click(await screen.findByText('Playlist One'));
-        fireEvent.click(screen.getByText('Close'));
-        expect(screen.queryByTestId('playlist-modal')).not.toBeInTheDocument();
+        fireEvent.click(await screen.findByTitle('Close Modal'));
+        expect(screen.queryByTitle('Close Modal')).not.toBeInTheDocument();
     });
 
     it('shows an error message when getUserPlaylists throws', async () => {
@@ -776,5 +768,200 @@ describe('LibraryPanel -- data privacy during upload', () => { // [NFR-002]
         // No call goes to an absolute external URL
         const allUrls = global.fetch.mock.calls.map(call => call[0]);
         expect(allUrls.every(url => !url.startsWith('http'))).toBe(true);
+    });
+});
+
+// ─── PlaylistModal — visibility ───────────────────────────────────────────────
+
+const playlist = {
+    id: 'pl1',
+    name: 'My Playlist',
+    images: [{ url: 'http://img.test/cover.jpg' }],
+    tracks: { total: 2 },
+};
+
+const makeTrack = (id, name, artist) => ({
+    id,
+    name,
+    type: 'track',
+    artists: [{ name: artist }],
+    album: { name: 'Album', images: [{ url: 'http://img.test/art.jpg' }] },
+    duration_ms: 200000,
+    preview_url: 'http://preview.test',
+});
+
+const makeItem = (track) => ({ track, item: null, is_local: false });
+
+describe('PlaylistModal — visibility', () => { // [NFR-007]
+    beforeEach(() => {
+        const { useSpotify } = require('../spotify/appContext');
+        mockGetPlaylistTracks = jest.fn();
+        useSpotify.mockReturnValue({ getPlaylistTracks: mockGetPlaylistTracks });
+    });
+
+    it('renders nothing when isOpen is false', () => {
+        const { container } = render(
+            <PlaylistModal isOpen={false} onClose={jest.fn()} playlist={playlist} />
+        );
+        // eslint-disable-next-line testing-library/no-node-access
+        expect(container.firstChild).toBeNull();
+    });
+
+    it('renders nothing when playlist is null', () => {
+        const { container } = render(
+            <PlaylistModal isOpen={true} onClose={jest.fn()} playlist={null} />
+        );
+        // eslint-disable-next-line testing-library/no-node-access
+        expect(container.firstChild).toBeNull();
+    });
+
+    it('renders the playlist name when open', async () => {
+        mockGetPlaylistTracks.mockResolvedValue({ items: [] });
+        render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlist} />);
+        expect(screen.getByText('My Playlist')).toBeInTheDocument();
+    });
+});
+
+// ─── PlaylistModal — loading state ───────────────────────────────────────────
+
+describe('PlaylistModal — loading state', () => { // [NFR-007]
+    beforeEach(() => {
+        const { useSpotify } = require('../spotify/appContext');
+        mockGetPlaylistTracks = jest.fn();
+        useSpotify.mockReturnValue({ getPlaylistTracks: mockGetPlaylistTracks });
+    });
+
+    it('shows loading spinner while fetching tracks', () => {
+        mockGetPlaylistTracks.mockReturnValue(new Promise(() => {})); // never resolves
+        render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlist} />);
+        expect(screen.getByText('Loading tracks...')).toBeInTheDocument();
+    });
+});
+
+// ─── PlaylistModal — track list ───────────────────────────────────────────────
+
+describe('PlaylistModal — track list', () => { // [NFR-007]
+    beforeEach(() => {
+        const { useSpotify } = require('../spotify/appContext');
+        mockGetPlaylistTracks = jest.fn();
+        useSpotify.mockReturnValue({ getPlaylistTracks: mockGetPlaylistTracks });
+    });
+
+    it('renders tracks returned by getPlaylistTracks', async () => {
+        const items = [
+            makeItem(makeTrack('t1', 'Song Alpha', 'Artist A')),
+            makeItem(makeTrack('t2', 'Song Beta',  'Artist B')),
+        ];
+        mockGetPlaylistTracks.mockResolvedValue({ items });
+        render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlist} />);
+        expect(await screen.findByText('Song Alpha')).toBeInTheDocument();
+        expect(await screen.findByText('Song Beta')).toBeInTheDocument();
+    });
+
+    it('renders artist and album metadata for each track', async () => {
+        const items = [makeItem(makeTrack('t1', 'Song Alpha', 'Artist A'))];
+        mockGetPlaylistTracks.mockResolvedValue({ items });
+        render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlist} />);
+        expect(await screen.findByText(/Artist A/)).toBeInTheDocument();
+        expect(await screen.findByText(/Album/)).toBeInTheDocument();
+    });
+
+    it('filters out local tracks (is_local: true)', async () => {
+        const items = [
+            { track: makeTrack('t1', 'Local Track', 'Artist A'), item: null, is_local: true },
+            makeItem(makeTrack('t2', 'Streaming Track', 'Artist B')),
+        ];
+        mockGetPlaylistTracks.mockResolvedValue({ items });
+        render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlist} />);
+        await screen.findByText('Streaming Track');
+        expect(screen.queryByText('Local Track')).not.toBeInTheDocument();
+    });
+
+    it('filters out non-track items', async () => {
+        const items = [
+            { track: { ...makeTrack('ep1', 'An Episode', 'Podcast'), type: 'episode' }, item: null, is_local: false },
+            makeItem(makeTrack('t1', 'A Song', 'Artist A')),
+        ];
+        mockGetPlaylistTracks.mockResolvedValue({ items });
+        render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlist} />);
+        await screen.findByText('A Song');
+        expect(screen.queryByText('An Episode')).not.toBeInTheDocument();
+    });
+});
+
+// ─── PlaylistModal — empty state ─────────────────────────────────────────────
+
+describe('PlaylistModal — empty state', () => { // [NFR-007]
+    beforeEach(() => {
+        const { useSpotify } = require('../spotify/appContext');
+        mockGetPlaylistTracks = jest.fn();
+        useSpotify.mockReturnValue({ getPlaylistTracks: mockGetPlaylistTracks });
+    });
+
+    it('shows empty message when playlist has no tracks', async () => {
+        mockGetPlaylistTracks.mockResolvedValue({ items: [] });
+        render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlist} />);
+        expect(await screen.findByText('No Tracks Found')).toBeInTheDocument();
+    });
+
+    it('shows empty message when API returns no items field', async () => {
+        mockGetPlaylistTracks.mockResolvedValue({});
+        render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlist} />);
+        expect(await screen.findByText('No Tracks Found')).toBeInTheDocument();
+    });
+});
+
+// ─── PlaylistModal — error state ─────────────────────────────────────────────
+
+describe('PlaylistModal — error state', () => { // [NFR-007]
+    beforeEach(() => {
+        const { useSpotify } = require('../spotify/appContext');
+        mockGetPlaylistTracks = jest.fn();
+        useSpotify.mockReturnValue({ getPlaylistTracks: mockGetPlaylistTracks });
+    });
+
+    it('shows error message when getPlaylistTracks rejects', async () => {
+        mockGetPlaylistTracks.mockRejectedValue(new Error('Network error'));
+        render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlist} />);
+        expect(await screen.findByText('Failed to Load Tracks')).toBeInTheDocument();
+        expect(await screen.findByText('Network error')).toBeInTheDocument();
+    });
+
+    it('shows a generic message when error has no message', async () => {
+        mockGetPlaylistTracks.mockRejectedValue(new Error(''));
+        render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlist} />);
+        expect(await screen.findByText('Failed to Load Tracks')).toBeInTheDocument();
+    });
+});
+
+// ─── PlaylistModal — close behaviour ─────────────────────────────────────────
+
+describe('PlaylistModal — close behaviour', () => { // [NFR-007]
+    beforeEach(() => {
+        const { useSpotify } = require('../spotify/appContext');
+        mockGetPlaylistTracks = jest.fn();
+        useSpotify.mockReturnValue({ getPlaylistTracks: mockGetPlaylistTracks });
+    });
+
+    it('calls onClose when the close button is clicked', async () => {
+        mockGetPlaylistTracks.mockResolvedValue({ items: [] });
+        const onClose = jest.fn();
+        render(<PlaylistModal isOpen={true} onClose={onClose} playlist={playlist} />);
+        await screen.findByText('No Tracks Found');
+        fireEvent.click(screen.getByTitle('Close Modal'));
+        expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it('resets track list when closed and reopened with a different playlist', async () => {
+        mockGetPlaylistTracks.mockResolvedValue({ items: [makeItem(makeTrack('t1', 'First Song', 'A'))] });
+        const { rerender } = render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlist} />);
+        await screen.findByText('First Song');
+
+        rerender(<PlaylistModal isOpen={false} onClose={jest.fn()} playlist={playlist} />);
+
+        mockGetPlaylistTracks.mockReturnValue(new Promise(() => {}));
+        rerender(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={{ ...playlist, id: 'pl2', name: 'Second Playlist' }} />);
+        expect(screen.getByText('Loading tracks...')).toBeInTheDocument();
+        expect(screen.queryByText('First Song')).not.toBeInTheDocument();
     });
 });

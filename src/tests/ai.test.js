@@ -1,4 +1,5 @@
 // Requirements: [FR-010] [FR-011] [FR-012] [FR-013] [FR-017] [FR-018] [FR-025] [FR-027] [NFR-001] [NFR-002] [NFR-005]
+// Requirements: [NFR-010]
 
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -584,30 +585,30 @@ describe('system prompt — effects constraints', () => { // [FR-017]
         await setupAndSend([]);
         const p = getPrompt();
         expect(p).toContain('reverb');
-        expect(p).toMatch(/mix 0–1/);
+        expect(p).toMatch(/mix 0–1/i);
     });
 
     it('includes delay with time, feedback, mix params', async () => {
         await setupAndSend([]);
         const p = getPrompt();
         expect(p).toContain('delay');
-        expect(p).toContain('feedback');
-        expect(p).toContain('time');
+        expect(p).toMatch(/feedback/i);
+        expect(p).toMatch(/\btime\b/i);
     });
 
     it('includes compressor with threshold and ratio', async () => {
         await setupAndSend([]);
         const p = getPrompt();
         expect(p).toContain('compressor');
-        expect(p).toContain('threshold');
-        expect(p).toContain('ratio');
+        expect(p).toMatch(/threshold/i);
+        expect(p).toMatch(/ratio/i);
     });
 
     it('includes highpass and lowpass filters', async () => {
         await setupAndSend([]);
         const p = getPrompt();
-        expect(p).toContain('highpass');
-        expect(p).toContain('lowpass');
+        expect(p).toMatch(/high.?pass/i);
+        expect(p).toMatch(/low.?pass/i);
     });
 
     it('includes panner with –1 to +1 range', async () => {
@@ -617,9 +618,9 @@ describe('system prompt — effects constraints', () => { // [FR-017]
         expect(p).toMatch(/–1.*\+1|\+1.*–1/);
     });
 
-    it('states volume gain range 0–2.0×', async () => {
+    it('states volume gain range 0–2', async () => {
         await setupAndSend([]);
-        expect(getPrompt()).toMatch(/gain 0–2\.0/);
+        expect(getPrompt()).toMatch(/gain 0–2/i);
     });
 });
 
@@ -893,5 +894,60 @@ describe('AIPanel -- data privacy', () => { // [NFR-002]
 
         const allUrls = global.fetch.mock.calls.map(call => call[0]);
         expect(allUrls.every(url => url === '/api/aiChat')).toBe(true);
+    });
+});
+
+// ─── system prompt — trackConfig derivation (NFR-010 guard) ─────────────────
+
+describe('system prompt — effects derived from trackConfig', () => { // [NFR-010]
+    it('includes all EFFECT_CONFIGS types in the system prompt', async () => {
+        // If a new effect is added to trackConfig.js, this test will catch
+        // whether it also appears in the AI's capability description.
+        await setupAndSend([]);
+        const p = getPrompt();
+        const { EFFECT_CONFIGS } = require('../utils/trackConfig');
+        Object.keys(EFFECT_CONFIGS).forEach(type => {
+            expect(p).toContain(type);
+        });
+    });
+
+    it('includes param ranges for each effect type from EFFECT_CONFIGS', async () => {
+        await setupAndSend([]);
+        const p = getPrompt();
+        const { EFFECT_CONFIGS } = require('../utils/trackConfig');
+        Object.values(EFFECT_CONFIGS).forEach(config => {
+            config.paramDefs.filter(pd => pd.type !== 'select').forEach(pd => {
+                expect(p).toContain(String(pd.min));
+                expect(p).toContain(String(pd.max));
+            });
+        });
+    });
+});
+
+// ─── AIPanel — context timestamp ─────────────────────────────────────────────
+
+describe('AIPanel — context timestamp', () => { // [FR-029]
+    it('shows a "Context at" timestamp on AI reply messages', async () => {
+        mockFetch('Here are my suggestions.');
+        render(<AIPanel />);
+        const input = await screen.findByPlaceholderText('Ask for track suggestions\u2026');
+        fireEvent.change(input, { target: { value: 'What should I try?' } });
+        fireEvent.click(screen.getByTitle('Send'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+        await screen.findByText('Here are my suggestions.');
+        expect(await screen.findByText(/Context at/i)).toBeInTheDocument();
+    });
+
+    it('does not show a timestamp on user messages', async () => {
+        mockFetch('response');
+        render(<AIPanel />);
+        const input = await screen.findByPlaceholderText('Ask for track suggestions\u2026');
+        fireEvent.change(input, { target: { value: 'My message here' } });
+        fireEvent.click(screen.getByTitle('Send'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+        await screen.findByText('My message here');
+        // The timestamp only appears once (on the AI reply), not on the user bubble
+        const timestamps = screen.queryAllByText(/Context at/i);
+        expect(timestamps.length).toBe(1);
     });
 });

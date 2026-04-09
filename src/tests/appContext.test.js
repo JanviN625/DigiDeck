@@ -511,6 +511,45 @@ describe('workspace persistence', () => { // [FR-007]
         expect(trackWithAudio.audioBuffer).toBeUndefined();
         expect(trackWithAudio.audioData).toBeUndefined();
     });
+
+    it('sets storageError when localStorage.setItem throws (quota exceeded)', () => { // [FR-007]
+        const { result } = renderMix();
+        act(() => { capturedAuthCallback({ uid: 'user_quota' }); });
+
+        // Make the next setItem throw to simulate a full quota
+        jest.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+            throw new DOMException('QuotaExceededError');
+        });
+
+        act(() => {
+            result.current.handleAddTrack({ title: 'New Track' });
+            jest.advanceTimersByTime(600);
+        });
+
+        expect(result.current.storageError).toBe(
+            'Workspace could not be auto-saved — browser storage may be full.'
+        );
+    });
+
+    it('clears storageError after 5 seconds', () => { // [FR-007]
+        const { result } = renderMix();
+        act(() => { capturedAuthCallback({ uid: 'user_quota2' }); });
+
+        jest.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+            throw new DOMException('QuotaExceededError');
+        });
+
+        act(() => {
+            result.current.handleAddTrack({ title: 'New Track' });
+            jest.advanceTimersByTime(600); // debounce fires → setItem throws → error set
+        });
+
+        expect(result.current.storageError).not.toBeNull();
+
+        act(() => { jest.advanceTimersByTime(5000); }); // 5 s auto-clear
+
+        expect(result.current.storageError).toBeNull();
+    });
 });
 
 // ─── useSpotifyConnect ────────────────────────────────────────────────────────
