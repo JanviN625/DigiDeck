@@ -990,7 +990,7 @@ export default function TrackCard({
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [isExpanded, audioUrl, handleSplit, settings.keybinds.splitAtPlayhead, segments, trackId, bpm, trackKey, handleAddTrack, trackName, settings, masterTimeRef]);
+    }, [isExpanded, audioUrl, handleSplit, settings.keybinds.splitAtPlayhead, segments, trackId, bpm, trackKey, handleAddTrack, trackName, settings, masterTimeRef, beatPositions, handleUpdateTrack, offsetSec]);
 
     // Play Pause Sync
     useEffect(() => {

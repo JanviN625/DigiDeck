@@ -6,8 +6,8 @@ if (typeof setImmediate === 'undefined') {
     global.setImmediate = (fn, ...args) => setTimeout(fn, 0, ...args);
 }
 
-// Skip when no emulator is available (e.g. CI). Set FIRESTORE_EMULATOR_TESTS=true to force-enable.
-const skipEmulatorTests = !!process.env.CI && process.env.FIRESTORE_EMULATOR_TESTS !== 'true';
+// Skip unless explicitly opted in. Start the Firebase emulator and set FIRESTORE_EMULATOR_TESTS=true to run.
+const skipEmulatorTests = process.env.FIRESTORE_EMULATOR_TESTS !== 'true';
 
 let testEnv;
 
