@@ -757,9 +757,9 @@ export default function TrackCard({
             let deltaSec = (dx / currentLaneWidth) * initialMasterDuration;
             deltaSec = Math.round(deltaSec / beatSec) * beatSec;
             
-            if (deltaSec <= 0.05) return; // Prevent extracting non-snapped micro amounts or dragging left
+            if (Math.abs(deltaSec) <= 0.05) return; // Prevent exact snapping noise, but allow negative (dragging left)
             
-            // Perform In-Place Gap Injection
+            // Perform In-Place Gap Injection or Deletion
             setIsAnalysing(true); // show generic loading state
             
             const trackObj = AudioEngineService.tracks.get(trackId);
@@ -776,16 +776,28 @@ export default function TrackCard({
             const gapFrames = Math.floor(gapSec * sr);
             const sliceFrame = Math.floor(seg.startPct * oldBuf.length);
             
-            const newLen = oldBuf.length + gapFrames;
+            // If dragging left, gapFrames is negative. We are removing silence.
+            const newLen = Math.max(0, oldBuf.length + gapFrames);
             const newBuf = AudioEngineService.ctx.createBuffer(channels, newLen, sr);
+            
             for (let ch = 0; ch < channels; ch++) {
                 const newData = newBuf.getChannelData(ch);
                 const oldData = oldBuf.getChannelData(ch);
-                // Copy Part A (Unmodified)
-                newData.set(oldData.subarray(0, sliceFrame), 0);
-                // gap is implicitly 0s
-                // Copy Part B (Shifted right by gapFrames)
-                newData.set(oldData.subarray(sliceFrame), sliceFrame + gapFrames);
+                
+                if (gapFrames > 0) {
+                    // Shift Right (inject gap of 0s)
+                    newData.set(oldData.subarray(0, sliceFrame), 0);
+                    // the gap remains explicitly 0.0 naturally
+                    newData.set(oldData.subarray(sliceFrame), sliceFrame + gapFrames);
+                } else {
+                    // Shift Left (delete gap amount before sliceFrame)
+                    const cutAmount = Math.abs(gapFrames);
+                    const safeCut = Math.min(cutAmount, sliceFrame); // Can't cut before file start
+                    const frontPartEnd = sliceFrame - safeCut;
+                    
+                    newData.set(oldData.subarray(0, frontPartEnd), 0);
+                    newData.set(oldData.subarray(sliceFrame), frontPartEnd);
+                }
             }
 
             const wavObj = audioBufferToWAV(newBuf);
@@ -801,10 +813,10 @@ export default function TrackCard({
                 let newStartSec = oldStartSec;
                 let newEndSec = oldEndSec;
                 
-                // If this segment is right of or equal to the drag start point, push it right!
-                if (s.startPct >= seg.startPct) {
-                    newStartSec += gapSec;
-                    newEndSec += gapSec;
+                // Use a tiny epsilon 0.00001s to prevent precision collision blocking edits for identical refs
+                if (s.startPct >= seg.startPct - 0.00001) {
+                    newStartSec = Math.max(0, newStartSec + gapSec);
+                    newEndSec = Math.max(0, newEndSec + gapSec);
                 }
                 
                 return {
@@ -845,18 +857,140 @@ export default function TrackCard({
     }, [trackId, masterDuration, masterBpm, segments, beatPositions, handleUpdateTrack]);
 
     // CTRL+S — split at playhead only for the card currently under the cursor.
-    // Checking isHoveredRef prevents all expanded cards from splitting simultaneously.
+    // CTRL+C / CTRL+V to copy/paste the active segment.
     useEffect(() => {
         if (!isExpanded || !audioUrl) return;
         const onKeyDown = (e) => {
-            if (matchesKeybind(e, settings.keybinds.splitAtPlayhead) && isHoveredRef.current) {
+            if (!isHoveredRef.current) return;
+            
+            if (matchesKeybind(e, settings.keybinds.splitAtPlayhead)) {
                 e.preventDefault();
                 handleSplit();
+            }
+            
+            // Ctrl+C (Copy)
+            if (e.ctrlKey && e.key.toLowerCase() === 'c') {
+                const activeSeg = segments.find(s => s.id === activeSegmentIdRef.current);
+                if (!activeSeg) return;
+                
+                const trackObj = AudioEngineService.tracks.get(trackId);
+                if (!trackObj || !trackObj.audioBuffer) return;
+                
+                const buf = trackObj.audioBuffer;
+                const sf = Math.floor(activeSeg.startPct * buf.length);
+                const ef = Math.floor(activeSeg.endPct * buf.length);
+                const len = ef - sf;
+                if (len <= 0) return;
+                
+                const clipBuf = AudioEngineService.ctx.createBuffer(buf.numberOfChannels, len, buf.sampleRate);
+                for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+                    clipBuf.copyToChannel(buf.getChannelData(ch).subarray(sf, ef), ch);
+                }
+                
+                const wavObj = audioBufferToWAV(clipBuf);
+                const blob = new Blob([wavObj], { type: 'audio/wav' });
+                
+                window.__digideck_clipboard = {
+                    blob,
+                    buffer: clipBuf,
+                    title: `Copied Segment (${trackName || 'Clip'})`,
+                    bpm,
+                    trackKey
+                };
+            }
+            
+            // Ctrl+V (Paste into Same Track)
+            if (e.ctrlKey && e.key.toLowerCase() === 'v') {
+                const clip = window.__digideck_clipboard;
+                if (!clip || !clip.buffer) return;
+                e.preventDefault();
+                
+                setIsAnalysing(true);
+                const trackObj = AudioEngineService.tracks.get(trackId);
+                if (!trackObj || !trackObj.audioBuffer) {
+                    setIsAnalysing(false);
+                    return;
+                }
+                
+                const oldBuf = trackObj.audioBuffer;
+                const sr = oldBuf.sampleRate;
+                const channels = oldBuf.numberOfChannels;
+                
+                const clipBuf = clip.buffer;
+                const insertSec = Math.max(0, masterTimeRef.current - offsetSec);
+                const insertFrame = Math.floor(insertSec * sr);
+                const gapFrames = clipBuf.length;
+                const gapSec = clipBuf.duration;
+                
+                // Account for pasting beyond the end of the current buffer
+                const newLen = Math.max(insertFrame + gapFrames, oldBuf.length + gapFrames);
+                const newBuf = AudioEngineService.ctx.createBuffer(channels, newLen, sr);
+                
+                for (let ch = 0; ch < channels; ch++) {
+                    const newData = newBuf.getChannelData(ch);
+                    const oldData = oldBuf.getChannelData(ch);
+                    const clipData = clipBuf.getChannelData(ch);
+                    
+                    const safeFront = Math.min(insertFrame, oldBuf.length);
+                    newData.set(oldData.subarray(0, safeFront), 0);
+                    newData.set(clipData, insertFrame);
+                    
+                    if (insertFrame < oldBuf.length) {
+                        newData.set(oldData.subarray(insertFrame), insertFrame + gapFrames);
+                    }
+                }
+                
+                const wavObj = audioBufferToWAV(newBuf);
+                const newBlob = new Blob([wavObj], { type: 'audio/wav' });
+                const newDuration = newLen / sr;
+                
+                // Shift downstream segments right
+                const updatedSegments = segments.map(s => {
+                    const oldStartSec = s.startPct * oldBuf.duration;
+                    const oldEndSec = s.endPct * oldBuf.duration;
+                    let newStartSec = oldStartSec;
+                    let newEndSec = oldEndSec;
+                    
+                    if (oldStartSec >= insertSec - 0.00001) {
+                        newStartSec += gapSec;
+                        newEndSec += gapSec;
+                    }
+                    
+                    return { ...s, startPct: newStartSec / newDuration, endPct: newEndSec / newDuration };
+                });
+                
+                // Add new pasted segment
+                const newSegId = Date.now();
+                updatedSegments.push({
+                    id: newSegId,
+                    startPct: insertSec / newDuration,
+                    endPct: (insertSec + gapSec) / newDuration,
+                    pitch: 0, speed: 1.0, fadeIn: 0, fadeOut: 0,
+                    eqLow: 0, eqMid: 0, eqHigh: 0,
+                    eqKills: { low: false, mid: false, high: false },
+                    effects: []
+                });
+                
+                const sortedSegments = updatedSegments.sort((a,b) => a.startPct - b.startPct);
+                
+                setSegments(sortedSegments);
+                setAudioDuration(newDuration);
+                
+                const newBeats = (beatPositions || []).map(b => b >= insertSec ? b + gapSec : b);
+                
+                handleUpdateTrack(trackId, {
+                    beatPositions: newBeats,
+                    initialSegments: sortedSegments,
+                    audioBlob: newBlob,
+                    duration: newDuration
+                });
+                
+                setIsAnalysing(false);
             }
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [isExpanded, audioUrl, handleSplit, settings.keybinds.splitAtPlayhead]);
+    }, [isExpanded, audioUrl, handleSplit, settings.keybinds.splitAtPlayhead, segments, trackId, bpm, trackKey, handleAddTrack, trackName, settings, masterTimeRef]);
 
     // Play Pause Sync
     useEffect(() => {
@@ -893,7 +1027,7 @@ export default function TrackCard({
             initialZoom: globalZoom,
             initiallyExpanded: isExpanded,
             initialSegments: segmentsRef.current,
-        });
+        }, true); // TRUE: Skip generic tracker history stack pollution for visual layout syncs!
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [trackName, volume, globalZoom, isExpanded, segments, handleUpdateTrack, trackId]);
 
