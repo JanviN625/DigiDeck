@@ -5,7 +5,7 @@ import { AlertCircle, Plus, X } from 'lucide-react';
 import { useSettings } from '../utils/useSettings';
 
 export default function MainWorkspace() {
-    const { tracks, handleAddTrack, handleDuplicateTrack, handleDeleteTrack, handleMoveTrack, trackLimitError, setTrackLimitError } = useMix();
+    const { tracks, handleAddTrack, handleDuplicateTrack, handleDeleteTrack, handleMoveTrack, trackLimitError, setTrackLimitError, storageError } = useMix();
     const { settings } = useSettings();
     const [draggedIndex, setDraggedIndex] = useState(null);
     const [dropGap, setDropGap] = useState(null);
@@ -93,6 +93,12 @@ export default function MainWorkspace() {
                     <button onClick={() => setTrackLimitError(null)} className="ml-2 text-red-400 hover:text-red-200 transition-colors">
                         <X size={16} />
                     </button>
+                </div>
+            )}
+            {storageError && (
+                <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 bg-amber-900/90 border border-amber-500/50 text-amber-100 px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm animate-in fade-in slide-in-from-top-4 duration-300">
+                    <AlertCircle size={18} className="text-amber-400 shrink-0" />
+                    <span className="text-sm font-medium">{storageError}</span>
                 </div>
             )}
             <div className="flex flex-col">

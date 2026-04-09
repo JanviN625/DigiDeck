@@ -30,7 +30,7 @@ Requirements with no entry are not yet covered by any test — see the Gaps sect
 | FR-020 | 5-track limit with error message | appContext.test.js, workspace.test.js | handleAddTrack — track limit (max 5), MainWorkspace — Add New Track button, MainWorkspace — track limit error notification |
 | FR-021 | AudD audio fingerprinting on upload | libraryPanel.test.js, utils.test.js | LibraryPanel — file upload, spotifyConfirmMatch |
 | FR-022 | Claude filename metadata parsing | libraryPanel.test.js, utils.test.js | LibraryPanel — parseFilename fallback, LibraryPanel — file upload, readId3Tags |
-| FR-023 | Local BPM/key analysis via Essentia.js | trackCard.test.js, audio.test.js, utils.test.js | TrackCard (essentiaAnalyzer mock), EssentiaAnalyzer (full describe), useAudioEngine — delegation |
+| FR-023 | Local BPM/key analysis via Essentia.js | trackCard.test.js, audio.test.js, utils.test.js | TrackCard (essentiaAnalyzer mock), EssentiaAnalyzer (full describe), analyzeAudioBuffer — timeout (30s), useAudioEngine — delegation |
 | FR-024 | Near real-time audio updates (tempo/pitch) | trackCard.test.js, audio.test.js, utils.test.js | TrackCard — pitch controls, TrackCard — speed controls, AudioEngine (setPitch/setSpeed), useAudioEngine — delegation |
 | FR-025 | AI chat session management (up to 5 chats) | ai.test.js | AIPanel — chat management |
 | FR-026 | Waveform visual feedback | trackCard.test.js | TrackCard — waveform |
@@ -40,9 +40,12 @@ Requirements with no entry are not yet covered by any test — see the Gaps sect
 | NFR-003 | User settings persistence (keybinds, defaults) | workspace.test.js, header.test.js, utils.test.js, profileModal.test.js | MainWorkspace — settings defaults on Add New Track, DEFAULT_SETTINGS shape, matchesKeybind, formatKeybind, useSettings, ProfileModal — Controls tab |
 | NFR-004 | Profile management (name, email, photo) | firebase.test.js, header.test.js, profileModal.test.js | useFirebaseAuth — updateDisplayName, updateProfilePhoto, removeProfilePhoto, updateUserEmail, Header — user profile, ProfileModal — General tab |
 | NFR-005 | Pitch/tempo degradation warning | trackCard.test.js, ai.test.js | TrackCard — quality (G6) warning, system prompt — pitch constraint, system prompt — BPM constraint |
-| NFR-007 | Error notifications for API/network failures | libraryPanel.test.js | LibraryPanel — upload error notification, LibraryPanel — delete error notification |
+| NFR-007 | Error notifications for API/network failures | libraryPanel.test.js | LibraryPanel — upload error notification, LibraryPanel — delete error notification, PlaylistModal — error state |
 | NFR-008 | Copyright disclaimer shown on upload | libraryPanel.test.js | LibraryPanel — copyright disclaimer |
 | NFR-009 | Export / offline render | header.test.js | Header — Export and Mix Preview |
+| FR-028 | Firebase cloud project save/load | header.test.js | Header — Save project, Header — Load project |
+| FR-029 | AI context timestamp on replies | ai.test.js | AIPanel — context timestamp |
+| NFR-010 | APP_CAPABILITIES derived from EFFECT_CONFIGS at runtime | ai.test.js | system prompt — effects derived from trackConfig |
 
 ---
 
@@ -57,10 +60,10 @@ Requirements with no entry are not yet covered by any test — see the Gaps sect
 | workspace.test.js | FR-003, FR-004, FR-019, FR-020, NFR-003 |
 | trackCard.test.js | FR-001, FR-002, FR-004, FR-005, FR-014, FR-017, FR-018, FR-019, FR-023, FR-024, FR-026, NFR-005 |
 | audio.test.js | FR-002, FR-005, FR-017, FR-018, FR-023, FR-024 |
-| ai.test.js | FR-010, FR-011, FR-012, FR-013, FR-017, FR-018, FR-025, FR-027, NFR-001, NFR-002, NFR-005 |
+| ai.test.js | FR-010, FR-011, FR-012, FR-013, FR-017, FR-018, FR-025, FR-027, FR-029, NFR-001, NFR-002, NFR-005, NFR-010 |
 | libraryPanel.test.js | FR-001, FR-008, FR-015, FR-016, FR-021, FR-022, NFR-002, NFR-007, NFR-008 |
 | spotify.test.js | FR-001, FR-015, NFR-002 |
-| header.test.js | FR-003, FR-004, FR-009, FR-015, NFR-003, NFR-004, NFR-009 |
+| header.test.js | FR-003, FR-004, FR-009, FR-015, FR-028, NFR-003, NFR-004, NFR-009 |
 | profileModal.test.js | FR-015, NFR-003, NFR-004 |
 | utils.test.js | FR-002, FR-005, FR-016, FR-017, FR-021, FR-022, FR-023, FR-024, NFR-003 |
 
@@ -72,3 +75,5 @@ Requirements with no entry are not yet covered by any test — see the Gaps sect
 |---|---|---|
 | FR-006 | Browser-only operation, no hardware required | Architecture-level constraint — verified by design, not unit-testable |
 | NFR-006 | Responsiveness prioritized over audio fidelity | Subjective quality attribute — not unit-testable with Jest |
+| NFR-011 | Action-origin audit trail (origin field on handleUpdateTrack) | Feature not yet implemented |
+| NFR-012 | Post-deploy smoke tests for auth, /api/aiChat, and Firebase Storage | Infrastructure not yet implemented |

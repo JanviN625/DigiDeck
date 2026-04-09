@@ -64,6 +64,9 @@
 22. [FR-022] - When a user uploads a file with an unrecognized or ambiguous filename, the system should send the filename to Claude for metadata parsing, so that a best-effort title and artist can be extracted from non-standard naming conventions.  
 	- Trust Hypothesis: Claude-parsed metadata is applied as a fallback only when ID3 and AudD both fail to return usable values.
 
+23. [FR-028] - When a user wants to persist their project across devices or browser sessions, the system should allow them to save and load named projects to and from Firebase Firestore, so that workspace state is not permanently lost if localStorage is cleared or the user switches devices.  
+	- Trust Hypothesis: A project saved by an authenticated user is retrievable from any authenticated session and restores the workspace to the state at the time of save.
+
 ### May Fail
 
 1. [FR-023] - When a track is loaded into the workspace, the system should analyze its BPM and musical key locally using Essentia.js, so that metadata is available without dependency on an external API.  
@@ -74,6 +77,9 @@
 3. [FR-025] - When a user manages AI chat sessions, the system should allow up to five saved chats with the ability to create, rename, and delete individual sessions, so that different mixing contexts can be explored separately.
 
 4. [FR-026] - When displaying audio changes, the system should provide visual feedback via waveform display, so that users can observe playback position and track structure without relying solely on audio output.
+
+5. [FR-029] - When an AI response is displayed, the system should show a timestamp indicating when the workspace context was captured for that request, so that users can judge whether the AI's advice reflects their current mix state.  
+	- Trust Hypothesis: Each AI reply includes a "Context at HH:MM" label derived from the time handleSend() was called, matching the workspace state that was serialized into the system prompt.
 
 ### Not Guaranteed
 
@@ -95,6 +101,9 @@
 4. [NFR-004] - When a user manages their profile, the system should allow updates to display name, email, and profile photo (maximum 5 MB) and reflect those changes immediately across the interface, so that the profile remains accurate without a page reload.  
 	- Trust Hypothesis: Profile changes are reflected in the interface immediately after confirmation without requiring a logout and login cycle.
 
+5. [NFR-010] - When the AI system prompt is constructed, the effects capabilities block should be derived programmatically from EFFECT_CONFIGS at runtime rather than maintained as a hardcoded string, so that the AI's knowledge of available controls stays accurate whenever effect definitions change.  
+	- Trust Hypothesis: Adding, removing, or renaming an effect in EFFECT_CONFIGS is automatically reflected in the next system prompt build without any changes to AIPanel.js.
+
 ### May Fail
 
 1. [NFR-005] - When pitch shift exceeds +/-3 semitones or tempo change exceeds +/-15%, the system should warn users that audio quality degradation may occur, so that users can make informed decisions about extreme adjustments.  
@@ -111,3 +120,11 @@
 
 5. [NFR-009] - When a user initiates an export or mix preview, the system should perform an offline audio render combining all active tracks with their configured effects, EQ, pitch, speed, and segment settings, so that the exported output accurately reflects the full workspace state.  
 	- Trust Hypothesis: The offline render reflects all per-track settings active at the time of export, and the user is informed of render progress.
+
+6. [NFR-012] - After each deployment, the system should support automated health checks that verify the auth endpoint, /api/aiChat proxy, and Firebase Storage are reachable and returning valid response shapes, so that configuration failures are caught before real users encounter them.  
+	- Trust Hypothesis: A deployment that breaks any critical API endpoint is detected by the smoke test before traffic is served to users.
+
+### Not Guaranteed
+
+1. [NFR-011] - When a track property is updated programmatically (by AudD enrichment, Essentia analysis, or Claude metadata parsing), the system should record the origin of that update alongside the change, so that unexpected track state can be traced to its source during debugging.  
+	- Trust Hypothesis: Every call to handleUpdateTrack carries an origin field ('user' | 'audd' | 'essentia' | 'claude') that is logged or observable in development.

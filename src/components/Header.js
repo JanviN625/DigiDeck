@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Pencil, Play, Pause, Square, ZoomIn, Activity, Undo, Redo } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Pencil, Play, Pause, Square, ZoomIn, Activity, Undo, Redo, FolderOpen, Trash2 } from 'lucide-react';
+import FirebaseService from '../firebase/FirebaseService';
 import { Avatar, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, DropdownSection, Spinner, Slider } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
 import { useFirebaseAuth } from '../firebase/firebase';
@@ -10,7 +11,7 @@ import { useSettings, matchesKeybind } from '../utils/useSettings';
 
 export default function Header() {
     const { user, signOut } = useFirebaseAuth();
-    const { tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, handleClearAllTracks, handleUndo, handleRedo, canUndo, canRedo } = useMix();
+    const { tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, handleClearAllTracks, handleOverwriteTracks, handleUndo, handleRedo, canUndo, canRedo } = useMix();
     const { settings } = useSettings();
     const [projectName, setProjectName] = useState('Untitled project');
     const [isEditingProject, setIsEditingProject] = useState(false);
@@ -19,7 +20,25 @@ export default function Header() {
     const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
     const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
     const [saveAlert, setSaveAlert] = useState(false);
+    const [saveError, setSaveError] = useState(false);
     const [showResetConfirm, setShowResetConfirm] = useState(false);
+    const [showLoadModal, setShowLoadModal] = useState(false);
+    const [savedProjects, setSavedProjects] = useState([]);
+    const [loadingProjects, setLoadingProjects] = useState(false);
+    const [loadError, setLoadError] = useState(null);
+
+    const handleSave = useCallback(async () => {
+        if (!user?.uid) return;
+        try {
+            await FirebaseService.saveProject(user.uid, projectName, tracks);
+            setSaveAlert(true);
+            setTimeout(() => setSaveAlert(false), 2000);
+        } catch (err) {
+            console.error('Project save failed:', err);
+            setSaveError(true);
+            setTimeout(() => setSaveError(false), 3000);
+        }
+    }, [user, projectName, tracks]);
 
     useEffect(() => {
         const handleKeydown = (e) => {
@@ -36,12 +55,49 @@ export default function Header() {
         };
         window.addEventListener('keydown', handleKeydown);
         return () => window.removeEventListener('keydown', handleKeydown);
-    }, [settings.keybinds, setUniversalIsPlaying]);
+    }, [settings.keybinds, setUniversalIsPlaying, handleSave]);
 
-    const handleSave = () => {
-        setSaveAlert(true);
-        setTimeout(() => setSaveAlert(false), 2000);
-    };
+    const handleOpenLoad = useCallback(async () => {
+        if (!user?.uid) return;
+        setShowLoadModal(true);
+        setLoadingProjects(true);
+        setLoadError(null);
+        try {
+            const projects = await FirebaseService.getUserProjects(user.uid);
+            setSavedProjects(projects);
+        } catch (err) {
+            console.error('Failed to load projects:', err);
+            setLoadError('Failed to load projects.');
+        } finally {
+            setLoadingProjects(false);
+        }
+    }, [user]);
+
+    const handleLoadProject = useCallback(async (projectId) => {
+        if (!user?.uid) return;
+        try {
+            const project = await FirebaseService.loadProject(user.uid, projectId);
+            if (project) {
+                handleOverwriteTracks(project.tracks ?? []);
+                setProjectName(project.name ?? 'Untitled project');
+            }
+            setShowLoadModal(false);
+        } catch (err) {
+            console.error('Failed to load project:', err);
+            setLoadError('Failed to load project.');
+        }
+    }, [user, handleOverwriteTracks]);
+
+    const handleDeleteProject = useCallback(async (e, projectId) => {
+        e.stopPropagation();
+        if (!user?.uid) return;
+        try {
+            await FirebaseService.deleteProject(user.uid, projectId);
+            setSavedProjects(prev => prev.filter(p => p.id !== projectId));
+        } catch (err) {
+            console.error('Failed to delete project:', err);
+        }
+    }, [user]);
 
     const handleMixPreview = async () => {
         if (renderingFor) return;
@@ -241,11 +297,12 @@ export default function Header() {
                     </button>
                 </div>
                 <div className="flex items-center gap-0.5">
-                    <button onClick={handleSave} className="text-sm font-medium px-3 py-1.5 rounded-md transition-colors w-16 text-center select-none group">
-                        <span className={`block transition-opacity duration-200 ${saveAlert ? 'opacity-0' : 'opacity-100 text-base-400 group-hover:text-base-100 group-hover:bg-base-700/60'}`}>Save</span>
-                        <span className={`block text-emerald-400 absolute top-1/2 -translate-y-1/2 transition-opacity duration-200 ${saveAlert ? 'opacity-100' : 'opacity-0'}`}>Saved!</span>
+                    <button onClick={handleSave} className="relative text-sm font-medium px-3 py-1.5 rounded-md transition-colors w-16 text-center select-none group">
+                        <span className={`block transition-opacity duration-200 ${saveAlert || saveError ? 'opacity-0' : 'opacity-100 text-base-400 group-hover:text-base-100 group-hover:bg-base-700/60'}`}>Save</span>
+                        <span className={`block text-emerald-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveAlert ? 'opacity-100' : 'opacity-0'}`}>Saved!</span>
+                        <span className={`block text-red-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveError ? 'opacity-100' : 'opacity-0'}`}>Failed</span>
                     </button>
-                    <button className="text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors">Load</button>
+                    <button onClick={handleOpenLoad} className="text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors">Load</button>
                     <button
                         onClick={handleExport}
                         disabled={!!renderingFor}
@@ -348,6 +405,60 @@ export default function Header() {
         </header>
         <AccountModal  isOpen={isAccountModalOpen}  onClose={() => setIsAccountModalOpen(false)} />
         <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
+
+        {/* ── Load project modal ── */}
+        {showLoadModal && (
+            <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+                onClick={() => setShowLoadModal(false)}
+            >
+                <div
+                    className="bg-base-900 border border-base-700 rounded-2xl w-96 max-h-[70vh] flex flex-col shadow-2xl"
+                    onClick={e => e.stopPropagation()}
+                >
+                    <div className="flex items-center justify-between px-5 py-4 border-b border-base-700 shrink-0">
+                        <h3 className="text-sm font-bold text-base-200 flex items-center gap-2">
+                            <FolderOpen size={15} className="text-base-500" />
+                            Load Project
+                        </h3>
+                        <button onClick={() => setShowLoadModal(false)} className="text-base-500 hover:text-base-200 p-1 rounded hover:bg-base-800 transition-colors">
+                            ✕
+                        </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+                        {loadingProjects ? (
+                            <p className="text-sm text-base-500 text-center py-8">Loading…</p>
+                        ) : loadError ? (
+                            <p className="text-sm text-red-400 text-center py-8">{loadError}</p>
+                        ) : savedProjects.length === 0 ? (
+                            <p className="text-sm text-base-500 text-center py-8">No saved projects yet.</p>
+                        ) : savedProjects.map(proj => (
+                            <div
+                                key={proj.id}
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => handleLoadProject(proj.id)}
+                                onKeyDown={e => e.key === 'Enter' && handleLoadProject(proj.id)}
+                                className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-base-800 hover:bg-base-700 cursor-pointer transition-colors"
+                            >
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium text-base-200 truncate">{proj.name}</p>
+                                    <p className="text-xs text-base-500 mt-0.5">{proj.tracks?.length ?? 0} track{proj.tracks?.length !== 1 ? 's' : ''}</p>
+                                </div>
+                                <button
+                                    onClick={e => handleDeleteProject(e, proj.id)}
+                                    title="Delete project"
+                                    className="ml-3 p-1.5 rounded-lg text-base-500 hover:text-red-400 hover:bg-base-600 transition-colors shrink-0"
+                                >
+                                    <Trash2 size={13} />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        )}
         </>
     );
 }

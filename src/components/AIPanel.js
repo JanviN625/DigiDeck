@@ -3,6 +3,7 @@ import { ChevronRight, Sparkles, Send, History, Plus, Trash2, X, Bot, AlertTrian
 import { Avatar, ScrollShadow } from '@heroui/react';
 import { useMix } from '../spotify/appContext';
 import { useFirebaseAuth } from '../firebase/firebase';
+import { buildEffectsCapabilities } from '../utils/trackConfig';
 
 // ─── Camelot Wheel ────────────────────────────────────────────────────────────
 
@@ -50,13 +51,7 @@ Fade In / Fade Out: any positive number of seconds (free entry). Applied at segm
 Master Volume (per track): 0–100 (percentage slider). Default 80.
 
 Effects chain — per segment, stackable, each independently enable/disable-able:
-  reverb:      mix 0–1 (wet/dry blend). Default mix=0.3.
-  delay:       time 0–1 s, feedback 0–0.95, mix 0–1. Default time=0.25, feedback=0.3, mix=0.5.
-  compressor:  threshold –60 to 0 dB, ratio 1–20 :1, knee 0–40 dB. Default –24 dB / 4:1 / 10 dB.
-  volume:      gain 0–2.0× (1.0 = unity, 2.0 = double amplitude). Default gain=1.0.
-  highpass:    frequency 20–5000 Hz (cuts below). Default 300 Hz.
-  lowpass:     frequency 200–20000 Hz (cuts above). Default 8000 Hz.
-  panner:      pan –1 (full left) to +1 (full right), 0 = center. Default 0.
+${buildEffectsCapabilities()}
 
 Segments: each track can be cut at the playhead (Ctrl+S) into multiple regions.
   Each segment has independent pitch, speed, EQ, fades, and effects chain.
@@ -223,7 +218,7 @@ function MarkdownMessage({ content }) {
 // ─── AIPanel ─────────────────────────────────────────────────────────────────
 
 export default function AIPanel() {
-    const { tracks } = useMix();
+    const { tracks, getLiveTracks } = useMix();
     const { user } = useFirebaseAuth();
     const displayName = user?.displayName || user?.email || 'User';
     const avatarSrc   = user?.photoURL || null;
@@ -371,7 +366,7 @@ export default function AIPanel() {
                     body: JSON.stringify({
                         model: 'claude-haiku-4-5',
                         max_tokens: 1024,
-                        system: buildSystemPrompt(tracks),
+                        system: buildSystemPrompt(getLiveTracks()),
                         messages: apiMessages.slice(-20),
                     }),
                 });
@@ -384,7 +379,7 @@ export default function AIPanel() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         messages: apiMessages.slice(-20),
-                        systemPrompt: buildSystemPrompt(tracks),
+                        systemPrompt: buildSystemPrompt(getLiveTracks()),
                     }),
                 });
                 const data = await res.json();
@@ -392,7 +387,13 @@ export default function AIPanel() {
                 replyText = data.content;
             }
 
-            const finalMessages = [...updated, { role: 'assistant', content: replyText }];
+            // Block actionable JSON-like objects to enforce safety
+            const actionRegex = /\{[\s\S]*"?(speed|pitch|eqLow|action|tool_use|update|command)"?\s*:/i;
+            if (actionRegex.test(replyText) || /\{[^{}]*\}/.test(replyText)) {
+                replyText = "Blocked actionable command from AI. The system has prevented structural command execution.";
+            }
+
+            const finalMessages = [...updated, { role: 'assistant', content: replyText, capturedAt: Date.now() }];
             setChats(prev => prev.map(c =>
                 c.id === activeChatId ? { ...c, messages: finalMessages } : c
             ));
@@ -621,6 +622,11 @@ export default function AIPanel() {
                                         />
                                         <div className="bg-base-800 border border-base-700 rounded-2xl rounded-bl-none px-3.5 py-2.5 text-sm text-base-200 max-w-[85%] shadow-sm">
                                             <MarkdownMessage content={msg.content} />
+                                            {msg.capturedAt && (
+                                                <p className="text-[10px] text-base-400 mt-1.5">
+                                                    Context at {new Date(msg.capturedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </p>
+                                            )}
                                         </div>
                                     </div>
                                 ) : (

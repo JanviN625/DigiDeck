@@ -253,13 +253,18 @@ describe('handleDuplicateTrack', () => {
         expect(titles.some(t => t.startsWith('Track 1 ('))).toBe(true);
     });
 
-    it('allows duplicating an existing track even at the 5-track count', () => {
+    it('does not allow duplicating an existing track if at the 5-track count limit', () => {
+        jest.useFakeTimers();
         const { result } = renderMix();
         act(() => { for (let i = 3; i <= 5; i++) result.current.handleAddTrack(); });
         const trackId = result.current.tracks[0].id;
         act(() => { result.current.handleDuplicateTrack(trackId, { title: 'Track 1' }); });
-        // Duplicates of existing songs are not blocked by the distinct-song limit
-        expect(result.current.tracks).toHaveLength(6);
+        // Duplicates are now blocked if track boundary limit of 5 is hit
+        expect(result.current.tracks).toHaveLength(5);
+        
+        act(() => { jest.runOnlyPendingTimers(); });
+        expect(result.current.trackLimitError).toBeTruthy();
+        jest.useRealTimers();
     });
 
     it('assigns a new unique id to the duplicate', () => {
@@ -510,6 +515,45 @@ describe('workspace persistence', () => { // [FR-007]
         expect(typeof trackWithAudio.audioUrl).toBe('string');
         expect(trackWithAudio.audioBuffer).toBeUndefined();
         expect(trackWithAudio.audioData).toBeUndefined();
+    });
+
+    it('sets storageError when localStorage.setItem throws (quota exceeded)', () => { // [FR-007]
+        const { result } = renderMix();
+        act(() => { capturedAuthCallback({ uid: 'user_quota' }); });
+
+        // Make the next setItem throw to simulate a full quota
+        jest.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+            throw new DOMException('QuotaExceededError');
+        });
+
+        act(() => {
+            result.current.handleAddTrack({ title: 'New Track' });
+            jest.advanceTimersByTime(600);
+        });
+
+        expect(result.current.storageError).toBe(
+            'Workspace could not be auto-saved — browser storage may be full.'
+        );
+    });
+
+    it('clears storageError after 5 seconds', () => { // [FR-007]
+        const { result } = renderMix();
+        act(() => { capturedAuthCallback({ uid: 'user_quota2' }); });
+
+        jest.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+            throw new DOMException('QuotaExceededError');
+        });
+
+        act(() => {
+            result.current.handleAddTrack({ title: 'New Track' });
+            jest.advanceTimersByTime(600); // debounce fires → setItem throws → error set
+        });
+
+        expect(result.current.storageError).not.toBeNull();
+
+        act(() => { jest.advanceTimersByTime(5000); }); // 5 s auto-clear
+
+        expect(result.current.storageError).toBeNull();
     });
 });
 

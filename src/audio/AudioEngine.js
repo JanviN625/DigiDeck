@@ -89,6 +89,18 @@ class AudioEngine {
         track.stFilter = stFilter;
         track.stNode = stNode;
 
+        const originalOnProcess = stNode.onaudioprocess;
+        if (originalOnProcess) {
+            stNode.onaudioprocess = (e) => {
+                try {
+                    originalOnProcess.call(stNode, e);
+                } catch (err) {
+                    console.error("AudioEngine processing dropped:", err);
+                    window.dispatchEvent(new CustomEvent('audio-drop', { detail: { trackId } }));
+                }
+            };
+        }
+
         stNode.connect(track.eqLow);
 
         // Restore gain to target in case a previous fade-out left it near zero.
