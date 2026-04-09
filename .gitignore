@@ -28,3 +28,4 @@ yarn-error.log*
 
 # firebase emulator logs
 *-debug.log
+.env*.local
