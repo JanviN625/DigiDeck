@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Pencil, Play, Pause, Square, ZoomIn, Activity, Undo, Redo, FolderOpen, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Pencil, Play, Pause, Square, ZoomIn, Activity, FolderOpen, Trash2 } from 'lucide-react';
 import FirebaseService from '../firebase/FirebaseService';
 import { Avatar, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, DropdownSection, Spinner, Slider } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
@@ -11,12 +11,11 @@ import { useSettings, matchesKeybind } from '../utils/useSettings';
 
 export default function Header() {
     const { user, signOut } = useFirebaseAuth();
-    const { tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, handleClearAllTracks, handleOverwriteTracks, handleUndo, handleRedo, canUndo, canRedo } = useMix();
+    const { tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, handleClearAllTracks, handleOverwriteTracks, handleUndo, handleRedo } = useMix();
     const { settings } = useSettings();
     const [projectName, setProjectName] = useState('Untitled project');
     const [isEditingProject, setIsEditingProject] = useState(false);
-    const [renderingFor, setRenderingFor] = useState(null); // null | 'preview' | 'export'
-    const previewSourceRef = useRef(null);
+    const [renderingFor, setRenderingFor] = useState(null); // null | 'export'
     const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
     const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
     const [saveAlert, setSaveAlert] = useState(false);
@@ -52,10 +51,18 @@ export default function Header() {
                 e.preventDefault();
                 handleSave();
             }
+            if (matchesKeybind(e, settings.keybinds.undo)) {
+                e.preventDefault();
+                handleUndo();
+            }
+            if (matchesKeybind(e, settings.keybinds.redo)) {
+                e.preventDefault();
+                handleRedo();
+            }
         };
         window.addEventListener('keydown', handleKeydown);
         return () => window.removeEventListener('keydown', handleKeydown);
-    }, [settings.keybinds, setUniversalIsPlaying, handleSave]);
+    }, [settings.keybinds, setUniversalIsPlaying, handleSave, handleUndo, handleRedo]);
 
     const handleOpenLoad = useCallback(async () => {
         if (!user?.uid) return;
@@ -98,29 +105,6 @@ export default function Header() {
             console.error('Failed to delete project:', err);
         }
     }, [user]);
-
-    const handleMixPreview = async () => {
-        if (renderingFor) return;
-        if (previewSourceRef.current) {
-            try { previewSourceRef.current.stop(); } catch {}
-            previewSourceRef.current = null;
-        }
-        setRenderingFor('preview');
-        try {
-            const mixBuffer = await AudioEngineService.renderOffline();
-            if (!mixBuffer) return;
-            const source = AudioEngineService.ctx.createBufferSource();
-            source.buffer = mixBuffer;
-            source.connect(AudioEngineService.masterGain);
-            source.start();
-            source.onended = () => { previewSourceRef.current = null; };
-            previewSourceRef.current = source;
-        } catch (err) {
-            console.error('Mix preview failed:', err);
-        } finally {
-            setRenderingFor(null);
-        }
-    };
 
     const handleExport = async () => {
         if (renderingFor) return;
@@ -172,7 +156,7 @@ export default function Header() {
         <header className="h-16 bg-base-800 border-b border-base-700 flex items-center justify-between px-6 shrink-0 relative">
 
             {/* Left — logo + project name */}
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 flex-1">
                 <div className="flex items-center gap-3 shrink-0">
                     <img src="/icon.png" alt="DigiDeck Logo" className="w-11 h-11 object-contain drop-shadow-md" />
                     <div className="font-extrabold text-sm leading-tight tracking-wider text-base-50">
@@ -205,7 +189,7 @@ export default function Header() {
 
             {/* Center — transport */}
             {tracks.length > 0 && (
-                <div className="flex-1 flex justify-center min-w-0 pointer-events-none mr-4">
+                <div className="flex justify-center min-w-0 pointer-events-none">
                     <div className="flex items-center gap-1 bg-base-900/60 border border-base-700 rounded-lg px-2 py-1.5 pointer-events-auto">
                     <button
                         onClick={() => setUniversalIsPlaying(v => !v)}
@@ -277,25 +261,7 @@ export default function Header() {
             )}
 
             {/* Right — actions + avatar */}
-            <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1 mr-4 border-r border-base-700 pr-4">
-                    <button
-                        onClick={handleUndo}
-                        disabled={!canUndo}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${canUndo ? 'text-base-100 bg-base-800 hover:bg-base-700 hover:text-white border border-base-700' : 'text-base-600 bg-transparent border border-transparent cursor-not-allowed'}`}
-                        title="Undo"
-                    >
-                        <Undo size={14} /> Undo
-                    </button>
-                    <button
-                        onClick={handleRedo}
-                        disabled={!canRedo}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${canRedo ? 'text-base-100 bg-base-800 hover:bg-base-700 hover:text-white border border-base-700' : 'text-base-600 bg-transparent border border-transparent cursor-not-allowed'}`}
-                        title="Redo"
-                    >
-                        <Redo size={14} /> Redo
-                    </button>
-                </div>
+            <div className="flex items-center gap-3 flex-1 justify-end">
                 <div className="flex items-center gap-0.5">
                     <button onClick={handleSave} className="relative text-sm font-medium px-3 py-1.5 rounded-md transition-colors w-16 text-center select-none group">
                         <span className={`block transition-opacity duration-200 ${saveAlert || saveError ? 'opacity-0' : 'opacity-100 text-base-400 group-hover:text-base-100 group-hover:bg-base-700/60'}`}>Save</span>
@@ -303,13 +269,6 @@ export default function Header() {
                         <span className={`block text-red-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveError ? 'opacity-100' : 'opacity-0'}`}>Failed</span>
                     </button>
                     <button onClick={handleOpenLoad} className="text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors">Load</button>
-                    <button
-                        onClick={handleExport}
-                        disabled={!!renderingFor}
-                        className="text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                        {renderingFor === 'export' ? 'Exporting…' : 'Export'}
-                    </button>
                     {showResetConfirm ? (
                         <div className="flex items-center gap-1.5 animate-in fade-in duration-150">
                             <span className="text-xs text-base-400">Reset workspace?</span>
@@ -340,14 +299,14 @@ export default function Header() {
                 <div className="w-px h-5 bg-base-700" />
 
                 <button
-                    onClick={handleMixPreview}
+                    onClick={handleExport}
                     disabled={!!renderingFor}
                     className="text-sm font-semibold text-base-50 bg-base-500 hover:bg-base-400 border border-base-400/50 px-4 py-1.5 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
-                    {renderingFor === 'preview' && (
+                    {renderingFor === 'export' && (
                         <Spinner size="sm" classNames={{ circle1: 'border-b-base-300', circle2: 'border-b-base-300' }} />
                     )}
-                    Mix Preview
+                    {renderingFor === 'export' ? 'Exporting…' : 'Export'}
                 </button>
 
                 <Dropdown

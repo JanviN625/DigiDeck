@@ -52,7 +52,7 @@ function processQueue() {
     getWorker().postMessage({ type: 'analyze', audioData, sampleRate });
 }
 
-const ANALYSIS_TIMEOUT_MS = 30000;
+const ANALYSIS_TIMEOUT_MS = 120000;
 
 export async function analyzeAudioBuffer(audioBuffer) {
     return new Promise((resolve, reject) => {
@@ -70,7 +70,7 @@ export async function analyzeAudioBuffer(audioBuffer) {
                 activeReject = null;
                 processQueue();
             }
-            reject(new Error('Essentia analysis timed out after 30s'));
+            reject(new Error('Essentia analysis timed out after 120s'));
         }, ANALYSIS_TIMEOUT_MS);
 
         const wrappedResolve = (result) => {

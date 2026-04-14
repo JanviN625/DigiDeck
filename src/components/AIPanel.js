@@ -5,7 +5,7 @@ import { useMix } from '../spotify/appContext';
 import { useFirebaseAuth } from '../firebase/firebase';
 import { buildEffectsCapabilities } from '../utils/trackConfig';
 
-// ─── Camelot Wheel ────────────────────────────────────────────────────────────
+// --- Camelot Wheel ------------------------------------------------------------
 
 const CAMELOT = {
     'C major': '8B',  'A minor': '8A',
@@ -24,33 +24,39 @@ const CAMELOT = {
 
 const getCamelotPosition = (key) => (key ? CAMELOT[key] ?? null : null);
 
-// ─── System Prompt Builder ────────────────────────────────────────────────────
+// --- System Prompt Builder ----------------------------------------------------
 
 const APP_CAPABILITIES = `
-DigiDeck app — controls and exact constraints (per segment unless noted):
+DigiDeck  - browser-based music mashup and mixing studio. Controls and exact constraints (per segment unless noted):
+
+TRACK SOURCES:
+- Local file uploads: full-length audio files uploaded by the user via the Library panel.
+- You cannot add tracks to the mix directly  - always direct the user to upload their own audio files via the Library panel.
+- When recommending tracks, give specific song and artist names. The user must source and upload the files themselves.
 
 IMPORTANT READ-ONLY values (cannot be changed by the user):
-- BPM: measured from the audio by Essentia.js — it is DISPLAY ONLY, not editable. To match tempos, use Speed.
+- BPM: measured from the audio  - DISPLAY ONLY, not editable. To match tempos, use Speed.
+- Key: detected from the audio  - DISPLAY ONLY.
 
-Speed (tempo multiplier) — continuous slider:
-  Range: 0.25× to 2.00×, any value to 2 decimal places (e.g. 0.91× is valid).
-  To match a target BPM: divide target BPM by current BPM, then clamp to 0.25–2.00.
+Speed (tempo multiplier)  - continuous slider:
+  Range: 0.25x to 2.00x, any value to 2 decimal places (e.g. 0.91x is valid).
+  To match a target BPM: divide target BPM by current BPM, then clamp to 0.25-2.00.
 
-Pitch — discrete semitone steps (±1 per click):
+Pitch  - discrete semitone steps (±1 per click):
   Range: any integer, but quality degrades beyond ±3 semitones (SoundTouch artifact limit).
-  Recommend staying within –3 to +3 st. Always express as whole numbers.
+  Recommend staying within ±3 st. Always express as whole numbers.
 
 EQ (three bands, each independent):
   Low shelf (200 Hz): –12 to +12 dB, step 0.5 dB
   Mid peaking (1 kHz): –12 to +12 dB, step 0.5 dB
   High shelf (8 kHz): –12 to +12 dB, step 0.5 dB
-  Kill switch: sets the band to –40 dB (effectively silent). Advise using kill for full cuts.
+  Kill switch: sets the band to -40 dB (effectively silent). Advise using kill for full cuts.
 
 Fade In / Fade Out: any positive number of seconds (free entry). Applied at segment boundaries.
 
-Master Volume (per track): 0–100 (percentage slider). Default 80.
+Master Volume (per track): 0-100 (percentage slider). Default 80.
 
-Effects chain — per segment, stackable, each independently enable/disable-able:
+Effects chain  - per segment, stackable, each independently enable/disable-able:
 ${buildEffectsCapabilities()}
 
 Segments: each track can be cut at the playhead (Ctrl+S) into multiple regions.
@@ -107,12 +113,12 @@ ${APP_CAPABILITIES}`;
     const trackLines = filledTracks.map((t, i) => {
         const bpm     = t.bpm     != null ? t.bpm : '(analysing…)';
         const key     = t.trackKey || '(analysing…)';
-        const energy  = t.energy  != null ? t.energy.toFixed(2) : '(analysing…)';
         const camelot = getCamelotPosition(t.trackKey);
-        const source  = t.isLocal ? 'uploaded file' : 'Spotify preview';
         const segLines = buildSegmentLines(t.initialSegments);
-        return `  Track ${i + 1}: "${t.title}"${t.artistName ? ` — ${t.artistName}` : ''}
-    BPM: ${bpm} | Key: ${key}${camelot ? ` (Camelot: ${camelot})` : ''} | Energy: ${energy} | Source: ${source}
+        const source = t.isLocal ? 'uploaded file' : 'Spotify preview';
+        const energy = t.energy != null ? ` | Energy: ${t.energy}` : '';
+        return `  Track ${i + 1}: "${t.title}"${t.artistName ? `  - ${t.artistName}` : ''} [${source}]
+    BPM: ${bpm} | Key: ${key}${camelot ? ` (Camelot: ${camelot})` : ''}${energy}
 ${segLines || '    Segment 1: all settings at default (pitch 0, speed 1x, no EQ, no effects)'}`;
     }).join('\n\n');
 
@@ -120,40 +126,76 @@ ${segLines || '    Segment 1: all settings at default (pitch 0, speed 1x, no EQ,
 
 ${APP_CAPABILITIES}
 
-Current mix — all BPM/key/energy values are measured from the actual audio; EQ, pitch, speed, fades, and effects are the user's current settings:
+Current mix  - BPM and key values are measured from the actual audio; EQ, pitch, speed, fades, and effects are the user's current settings:
 ${trackLines}
 
 Rules:
-- You know the full state of each track and every available control — never ask the user what effects or controls are available
+- You know the full state of each track and every available control  - never ask the user what effects or controls are available
 - Give specific, actionable advice using exact control names and values that exist within the stated ranges and presets
-- For speed: any value between 0.25 and 2.00 is valid; calculate target BPM ÷ current BPM and clamp to that range
-- BPM is read-only — never tell the user to "change the BPM"; recommend Speed adjustments instead
-- Recommend new tracks by title/artist only — do not assert their BPM or key (your training data is unreliable); explain compatibility reasoning instead
-- Prioritise BPM proximity (within ~10 BPM via Speed), Camelot key adjacency (±1), and similar energy
+- For speed: any value between 0.25 and 2.00 is valid; calculate target BPM / current BPM and clamp to that range
+- BPM is read-only (Key is also read-only)  - never tell the user to "change the BPM"; recommend Speed adjustments instead
+- When asked to recommend tracks, always do so  - give specific song and artist names. Note that your BPM/key knowledge of those tracks may be inaccurate; explain compatibility reasoning based on genre, style, and mood instead
+- The bias disclosure shown in the UI applies to your training data on specific tracks  - it does not mean you should refuse to recommend. Recommend confidently with appropriate caveats
+- Prioritise BPM proximity (within ~10 BPM via Speed) and Camelot key adjacency (+/-1) for harmonic mixing
+- Remind users that recommended tracks must be sourced and uploaded manually via the Library panel
 - Keep responses concise; use markdown headers and bullet lists for multi-step advice`;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// --- Helpers -----------------------------------------------------------------
 
 const welcomeText = (count) => count > 0
     ? `I can see your mix has ${count} track${count > 1 ? 's' : ''}. Ask me for compatible suggestions, or tell me the vibe you're going for.`
-    : `No tracks yet — tell me what you're working on and I'll suggest some starting points.`;
+    : `No tracks yet  - tell me what you're working on and I'll suggest some starting points.`;
 
 const makeNewChat = (filledCount) => ({
     id: Date.now(),
     title: 'New Chat',
-    messages: [{ role: 'assistant', content: welcomeText(filledCount) }],
+    messages: [{ role: 'assistant', content: welcomeText(filledCount), isWelcome: true }],
     createdAt: Date.now(),
 });
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// --- Chips -------------------------------------------------------------------
+
+const CHIPS = [
+    { id: 'diagnose',   label: 'Diagnose mix',        prefill: 'Why does my mix sound ' },
+    { id: 'recipe',     label: 'Effects chain recipe', prefill: 'Give me a specific effects chain recipe for a ' },
+    { id: 'setbuilder', label: 'Build set order',       prefill: null },
+    { id: 'health',     label: 'Health check',          prefill: null },
+    { id: 'segment',    label: 'Segment advice',        prefill: null },
+    { id: 'transition', label: 'Plan transition',       prefill: null },
+];
+
+const buildChipMessage = (chipId, getLiveTracks) => {
+    const tracks = getLiveTracks().filter(t => t.audioUrl || t.spotifyId);
+    switch (chipId) {
+        case 'health':
+            return 'Audit my current mix for issues: flag large BPM gaps, key clashes, clipping-risk EQ settings, missing fades, and conflicting effects.';
+        case 'transition':
+            if (tracks.length >= 2) {
+                return `Plan a detailed transition from "${tracks[0].title}" to "${tracks[1].title}": speed multiplier, pitch shift, EQ kills, segment cut points, and fade timing.`;
+            }
+            return 'Plan a detailed transition between two tracks: advise on speed multiplier, pitch shift, EQ kills, segment cut points, and fade timing.';
+        case 'segment':
+            return 'Based on the BPM and segment data for my loaded tracks, advise where I should cut each track for the smoothest transitions.';
+        case 'setbuilder': {
+            const names = tracks.map(t => `"${t.title}"`).join(', ');
+            return names
+                ? `Plan the optimal DJ set order and transitions for: ${names}. Consider BPM flow, key compatibility, and energy arc.`
+                : 'Help me plan a DJ set order and transitions. What should I consider for BPM flow, key compatibility, and energy arc?';
+        }
+        default:
+            return null;
+    }
+};
+
+// --- Constants ----------------------------------------------------------------
 
 const MIN_WIDTH    = 288;
 const MAX_WIDTH    = 560;
 const MAX_CHATS    = 5;
 const CONTEXT_LIMIT = 20; // messages at which the API starts dropping early history
 
-// ─── MarkdownMessage ──────────────────────────────────────────────────────────
+// --- MarkdownMessage ----------------------------------------------------------
 
 function MarkdownMessage({ content }) {
     const lines = (content ?? '').split('\n');
@@ -167,7 +209,7 @@ function MarkdownMessage({ content }) {
         const cls = listType === 'ol'
             ? 'list-decimal list-inside space-y-0.5 my-1 pl-1'
             : 'list-disc list-inside space-y-0.5 my-1 pl-1';
-        out.push(<Tag key={out.length} className={cls}>{listItems}</Tag>);
+        out.push(<Tag key={'list-' + out.length} className={cls}>{listItems}</Tag>);
         listItems = []; listType = null;
     };
 
@@ -215,7 +257,7 @@ function MarkdownMessage({ content }) {
     return <div className="space-y-0.5 text-sm leading-relaxed">{out}</div>;
 }
 
-// ─── AIPanel ─────────────────────────────────────────────────────────────────
+// --- AIPanel -----------------------------------------------------------------
 
 export default function AIPanel() {
     const { tracks, getLiveTracks } = useMix();
@@ -227,11 +269,13 @@ export default function AIPanel() {
     const [input, setInput]             = useState('');
     const [loading, setLoading]         = useState(false);
     const [showModal, setShowModal]     = useState(false);
+    const [dismissedDisclosures, setDismissedDisclosures] = useState(() => new Set());
     const bottomRef = useRef(null);
+    const inputRef  = useRef(null);
 
     const filledCount = tracks.filter(t => t.audioUrl || t.spotifyId).length;
 
-    // ─── Chat persistence ─────────────────────────────────────────────────────
+    // --- Chat persistence -----------------------------------------------------
 
     const [chats, setChats] = useState(() => {
         try {
@@ -268,32 +312,20 @@ export default function AIPanel() {
         });
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // ─── Derived ──────────────────────────────────────────────────────────────
+    // --- Derived --------------------------------------------------------------
 
     const activeChat = chats.find(c => c.id === activeChatId) ?? null;
     const messages   = useMemo(() => activeChat?.messages ?? [], [activeChat]);
 
-    // Replace the welcome bubble in the active chat when track count changes
-    // (only while no real conversation has started)
-    const prevFilledRef = useRef(filledCount);
-    useEffect(() => {
-        if (prevFilledRef.current === filledCount) return;
-        prevFilledRef.current = filledCount;
-        setChats(prev => prev.map(c => {
-            if (c.id !== activeChatId) return c;
-            if (c.messages.length <= 1) {
-                return { ...c, messages: [{ role: 'assistant', content: welcomeText(filledCount) }] };
-            }
-            return c;
-        }));
-    }, [filledCount, activeChatId]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Welcome message is always derived from live filledCount at render time;
+    // messages[0] (the initial assistant bubble) content is overridden below in JSX.
 
     // Auto-scroll to bottom on new messages
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
-    // ─── Chat management ──────────────────────────────────────────────────────
+    // --- Chat management ------------------------------------------------------
 
     const createNewChat = () => {
         if (chats.length >= MAX_CHATS) return;
@@ -323,11 +355,11 @@ export default function AIPanel() {
     const allChatsAtLimit = chats.length >= MAX_CHATS && chats.every(c => c.messages.length >= CONTEXT_LIMIT);
     const canCreateChat   = chats.length < MAX_CHATS;
 
-    // ─── Send message ─────────────────────────────────────────────────────────
+    // --- Send message ---------------------------------------------------------
 
-    const handleSend = async () => {
-        if (!input.trim() || loading || !activeChatId) return;
-        const userMsg = { role: 'user', content: input.trim() };
+    const handleSendWithText = async (text) => {
+        if (!text || loading || !activeChatId) return;
+        const userMsg = { role: 'user', content: text };
         const currentMessages = activeChat?.messages ?? [];
         const updated = [...currentMessages, userMsg];
 
@@ -347,45 +379,22 @@ export default function AIPanel() {
         setLoading(true);
 
         try {
-            // Strip any leading assistant messages — Anthropic requires user-first
+            // Strip any leading assistant messages  - Anthropic requires user-first
             const firstUserIdx = updated.findIndex(m => m.role === 'user');
             const apiMessages = firstUserIdx >= 0 ? updated.slice(firstUserIdx) : updated;
 
-            const reactKey = process.env.REACT_APP_ANTHROPIC_API_KEY;
-            let replyText;
-
-            if (reactKey) {
-                const res = await fetch('https://api.anthropic.com/v1/messages', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'x-api-key': reactKey,
-                        'anthropic-version': '2023-06-01',
-                        'anthropic-dangerous-direct-browser-access': 'true',
-                    },
-                    body: JSON.stringify({
-                        model: 'claude-haiku-4-5',
-                        max_tokens: 1024,
-                        system: buildSystemPrompt(getLiveTracks()),
-                        messages: apiMessages.slice(-20),
-                    }),
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
-                replyText = data.content[0].text;
-            } else {
-                const res = await fetch('/api/aiChat', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        messages: apiMessages.slice(-20),
-                        systemPrompt: buildSystemPrompt(getLiveTracks()),
-                    }),
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-                replyText = data.content;
-            }
+            const apiBase = process.env.REACT_APP_API_URL || '';
+            const res = await fetch(`${apiBase}/api/aiChat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    messages: apiMessages.slice(-20),
+                    systemPrompt: buildSystemPrompt(getLiveTracks()),
+                }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+            let replyText = data.content;
 
             // Block actionable JSON-like objects to enforce safety
             const actionRegex = /\{[\s\S]*"?(speed|pitch|eqLow|action|tool_use|update|command)"?\s*:/i;
@@ -408,6 +417,8 @@ export default function AIPanel() {
         }
     };
 
+    const handleSend = () => handleSendWithText(input.trim());
+
     const handleKeyDown = (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -415,7 +426,17 @@ export default function AIPanel() {
         }
     };
 
-    // ─── Resize handle ────────────────────────────────────────────────────────
+    const handleChipClick = (chip) => {
+        if (chip.prefill !== null) {
+            setInput(chip.prefill);
+            inputRef.current?.focus();
+        } else {
+            const msg = buildChipMessage(chip.id, getLiveTracks);
+            if (msg) handleSendWithText(msg);
+        }
+    };
+
+    // --- Resize handle --------------------------------------------------------
 
     const handleResizeStart = (e) => {
         e.preventDefault();
@@ -432,7 +453,7 @@ export default function AIPanel() {
         document.addEventListener('mouseup', onUp);
     };
 
-    // ─── Collapsed view ───────────────────────────────────────────────────────
+    // --- Collapsed view -------------------------------------------------------
 
     if (isCollapsed) {
         return (
@@ -450,11 +471,11 @@ export default function AIPanel() {
         );
     }
 
-    // ─── Render ───────────────────────────────────────────────────────────────
+    // --- Render ---------------------------------------------------------------
 
     return (
         <>
-            {/* ── Chat history modal ── */}
+            {/* -- Chat history modal -- */}
             {showModal && (
                 <div
                     className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
@@ -507,7 +528,7 @@ export default function AIPanel() {
                                         <p className="text-xs text-base-500 mt-0.5">
                                             {chat.messages.length} message{chat.messages.length !== 1 ? 's' : ''}
                                             {chat.messages.length >= CONTEXT_LIMIT && (
-                                                <span className="text-amber-500 ml-1">· Context full</span>
+                                                <span className="text-amber-500 ml-1">- Context full</span>
                                             )}
                                         </p>
                                     </div>
@@ -538,7 +559,7 @@ export default function AIPanel() {
                 </div>
             )}
 
-            {/* ── Main panel ── */}
+            {/* -- Main panel -- */}
             <aside
                 style={{ width: panelWidth }}
                 className="bg-base-900 border-l border-base-700 flex flex-col shrink-0 relative overflow-hidden"
@@ -590,27 +611,41 @@ export default function AIPanel() {
                     <>
                         {/* Message list */}
                         <ScrollShadow className="flex-1 px-3 py-3 space-y-4 custom-scrollbar overflow-y-auto">
-                            {/* Persistent bias disclosure -- rendered before all chat messages */}
-                            <div className="flex items-end gap-2">
-                                <Avatar
-                                    size="sm"
-                                    icon={<Bot size={14} />}
-                                    classNames={{
-                                        base: 'bg-base-700 shrink-0',
-                                        icon: 'text-base-300',
-                                    }}
-                                />
-                                <div className="bg-base-800 border border-base-700 rounded-2xl rounded-bl-none px-3.5 py-2.5 max-w-[85%] shadow-sm">
-                                    <div className="flex items-center gap-1.5 mb-1">
-                                        <AlertTriangle size={10} className="text-red-400 shrink-0" />
-                                        <span className="text-[10px] font-semibold uppercase tracking-wide text-red-400">Heads up</span>
+                            {/* Dismissable bias disclosure -- once per chat */}
+                            {!dismissedDisclosures.has(activeChatId) && (
+                                <div className="flex items-end gap-2">
+                                    <Avatar
+                                        size="sm"
+                                        icon={<Bot size={14} />}
+                                        classNames={{
+                                            base: 'bg-base-700 shrink-0',
+                                            icon: 'text-base-300',
+                                        }}
+                                    />
+                                    <div className="bg-base-800 border border-base-700 rounded-2xl rounded-bl-none px-3.5 py-2.5 text-sm text-base-200 max-w-[85%] shadow-sm">
+                                        <div className="flex items-start justify-between gap-2 mb-1">
+                                            <div className="flex items-center gap-1.5">
+                                                <AlertTriangle size={10} className="text-red-400 shrink-0 mt-0.5" />
+                                                <span className="text-[10px] font-semibold uppercase tracking-wide text-red-400">Heads up</span>
+                                            </div>
+                                            <button
+                                                onClick={() => setDismissedDisclosures(prev => new Set([...prev, activeChatId]))}
+                                                className="text-base-600 hover:text-base-400 transition-colors shrink-0 -mt-0.5 -mr-0.5"
+                                                title="Dismiss"
+                                            >
+                                                <X size={11} />
+                                            </button>
+                                        </div>
+                                        <MarkdownMessage content="Track suggestions are based on training data and may be inaccurate. BPM and key values shown are measured directly from your audio - not guessed." />
                                     </div>
-                                    <p className="text-[12px] text-base-200 leading-relaxed">Track suggestions are based on training data and may be inaccurate. BPM, key, and energy values shown are measured directly from your audio -- not guessed.</p>
                                 </div>
-                            </div>
+                            )}
 
-                            {messages.map((msg, i) => (
-                                msg.role === 'assistant' ? (
+                            {messages.map((msg, i) => {
+                                const content = msg.isWelcome
+                                    ? welcomeText(filledCount)
+                                    : msg.content;
+                                return msg.role === 'assistant' ? (
                                     <div key={i} className="flex items-end gap-2">
                                         <Avatar
                                             size="sm"
@@ -621,7 +656,7 @@ export default function AIPanel() {
                                             }}
                                         />
                                         <div className="bg-base-800 border border-base-700 rounded-2xl rounded-bl-none px-3.5 py-2.5 text-sm text-base-200 max-w-[85%] shadow-sm">
-                                            <MarkdownMessage content={msg.content} />
+                                            <MarkdownMessage content={content} />
                                             {msg.capturedAt && (
                                                 <p className="text-[10px] text-base-400 mt-1.5">
                                                     Context at {new Date(msg.capturedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -660,8 +695,8 @@ export default function AIPanel() {
                                             />
                                         )}
                                     </div>
-                                )
-                            ))}
+                                );
+                            })}
 
                             {loading && (
                                 <div className="flex items-end gap-2">
@@ -684,10 +719,27 @@ export default function AIPanel() {
                             <div ref={bottomRef} />
                         </ScrollShadow>
 
+                        {/* Chips row */}
+                        <div className="shrink-0 px-3 pt-2 pb-1">
+                            <div className="flex gap-1.5 overflow-x-auto pb-1">
+                                {CHIPS.map(chip => (
+                                    <button
+                                        key={chip.id}
+                                        disabled={loading}
+                                        onClick={() => handleChipClick(chip)}
+                                        className="shrink-0 px-2.5 py-1 rounded-full text-xs font-medium bg-base-800 border border-base-700 text-base-400 hover:text-base-200 hover:border-base-500 hover:bg-base-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                                    >
+                                        {chip.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
                         {/* Input row */}
                         <div className="shrink-0 px-3 pb-4 pt-2">
                             <div className="flex items-center gap-2 bg-base-800 border border-base-700 rounded-xl px-3 py-2 shadow-lg focus-within:ring-1 focus-within:ring-base-600">
                                 <input
+                                    ref={inputRef}
                                     type="text"
                                     value={input}
                                     onChange={e => setInput(e.target.value)}

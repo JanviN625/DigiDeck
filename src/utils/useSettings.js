@@ -9,8 +9,10 @@ export const DEFAULT_SETTINGS = {
   defaultFadeOut: 0,
   keybinds: {
     splitAtPlayhead: { key: 'x', ctrl: false, shift: false, alt: false },
-    saveProject:     { key: 's', ctrl: true, shift: false, alt: false },
+    saveProject:     { key: 's', ctrl: true,  shift: false, alt: false },
     playPause:       { key: ' ', ctrl: false, shift: false, alt: false },
+    undo:            { key: 'z', ctrl: true,  shift: false, alt: false },
+    redo:            { key: 'y', ctrl: true,  shift: false, alt: false },
   },
 };
 
@@ -18,7 +20,13 @@ export function useSettings() {
   const [settings, setSettings] = useState(() => {
     try {
       const stored = localStorage.getItem('digideck_settings');
-      return stored ? { ...DEFAULT_SETTINGS, ...JSON.parse(stored) } : DEFAULT_SETTINGS;
+      if (!stored) return DEFAULT_SETTINGS;
+      const parsed = JSON.parse(stored);
+      return {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        keybinds: { ...DEFAULT_SETTINGS.keybinds, ...(parsed.keybinds ?? {}) },
+      };
     } catch { return DEFAULT_SETTINGS; }
   });
 

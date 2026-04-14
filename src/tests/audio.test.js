@@ -977,11 +977,62 @@ describe('EssentiaAnalyzer', () => { // [FR-023]
         });
     });
 
-    describe('analyzeAudioBuffer — timeout (30s)', () => {
+    describe('analyzeAudioBuffer — queue mechanism', () => { // [FR-023]
+        it('queues a second call while the first is in-flight and processes it on completion', async () => {
+            const buf1 = { sampleRate: 44100, getChannelData: jest.fn(() => new Float32Array(10)) };
+            const buf2 = { sampleRate: 44100, getChannelData: jest.fn(() => new Float32Array(10)) };
+
+            const p1 = analyzeAudioBuffer(buf1);
+            const p2 = analyzeAudioBuffer(buf2);
+
+            // Only one postMessage sent while first is in-flight
+            expect(mockWorkerInstance.postMessage).toHaveBeenCalledTimes(1);
+
+            // Resolve first call — processQueue fires the second
+            mockWorkerInstance.onmessage({
+                data: { type: 'done', bpm: 120, key: 'C', scale: 'major', beatPositions: [] },
+            });
+            await p1;
+
+            expect(mockWorkerInstance.postMessage).toHaveBeenCalledTimes(2);
+
+            // Resolve second call
+            mockWorkerInstance.onmessage({
+                data: { type: 'done', bpm: 140, key: 'G', scale: 'minor', beatPositions: [0.5] },
+            });
+            const result2 = await p2;
+            expect(result2.bpm).toBe(140);
+            expect(result2.key).toBe('G');
+        });
+
+        it('processes next queued call after an error resolves the current one', async () => {
+            const buf1 = { sampleRate: 44100, getChannelData: jest.fn(() => new Float32Array(10)) };
+            const buf2 = { sampleRate: 44100, getChannelData: jest.fn(() => new Float32Array(10)) };
+
+            const p1 = analyzeAudioBuffer(buf1);
+            const p2 = analyzeAudioBuffer(buf2);
+
+            // Fail the first call
+            mockWorkerInstance.onmessage({ data: { type: 'error', error: 'Analysis failed' } });
+            await p1.catch(() => {});
+
+            // processQueue should have dispatched buf2
+            expect(mockWorkerInstance.postMessage).toHaveBeenCalledTimes(2);
+
+            // Resolve the queued call
+            mockWorkerInstance.onmessage({
+                data: { type: 'done', bpm: 99, key: 'D', scale: 'major', beatPositions: [] },
+            });
+            const result2 = await p2;
+            expect(result2.bpm).toBe(99);
+        });
+    });
+
+    describe('analyzeAudioBuffer — timeout (120s)', () => {
         beforeEach(() => jest.useFakeTimers());
         afterEach(() => jest.useRealTimers());
 
-        it('rejects with a timeout error if the worker never responds within 30 s', async () => {
+        it('rejects with a timeout error if the worker never responds within 120 s', async () => {
             const mockBuffer = {
                 sampleRate: 44100,
                 getChannelData: jest.fn(() => new Float32Array(10)),
@@ -989,10 +1040,10 @@ describe('EssentiaAnalyzer', () => { // [FR-023]
 
             const promise = analyzeAudioBuffer(mockBuffer);
 
-            // Advance past the 30-second guard without sending any worker message
-            jest.advanceTimersByTime(30001);
+            // Advance past the 120-second guard without sending any worker message
+            jest.advanceTimersByTime(120001);
 
-            await expect(promise).rejects.toThrow('Essentia analysis timed out after 30s');
+            await expect(promise).rejects.toThrow('Essentia analysis timed out after 120s');
         });
 
         it('does not reject if the worker responds before the timeout', async () => {
@@ -1003,14 +1054,14 @@ describe('EssentiaAnalyzer', () => { // [FR-023]
 
             const promise = analyzeAudioBuffer(mockBuffer);
 
-            // Worker responds at 10 s — well within the 30 s window
+            // Worker responds at 10 s — well within the 120 s window
             jest.advanceTimersByTime(10000);
             mockWorkerInstance.onmessage({
                 data: { type: 'done', bpm: 120, key: 'C', scale: 'major', beatPositions: [] },
             });
 
-            // Now advance past 30 s — the timeout should have been cleared
-            jest.advanceTimersByTime(25000);
+            // Now advance past 120 s — the timeout should have been cleared
+            jest.advanceTimersByTime(120000);
 
             await expect(promise).resolves.toBeDefined();
         });

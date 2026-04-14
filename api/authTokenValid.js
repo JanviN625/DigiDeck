@@ -62,6 +62,6 @@ module.exports = async (req, res) => {
 
     } catch (error) {
         console.error('Error in /api/auth:', error.response?.data || error.message);
-        return res.status(500).json({ error: 'Internal Server Error', details: error.message });
+        return res.status(500).json({ error: 'Internal Server Error' });
     }
 };

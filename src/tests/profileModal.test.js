@@ -110,6 +110,8 @@ const defaultSettings = {
     keybinds: {
         splitAtPlayhead: { key: 's', ctrl: true,  shift: false, alt: false },
         playPause:       { key: ' ', ctrl: false, shift: false, alt: false },
+        undo:            { key: 'z', ctrl: true,  shift: false, alt: false },
+        redo:            { key: 'y', ctrl: true,  shift: false, alt: false },
     },
 };
 
@@ -662,7 +664,7 @@ describe('SettingsModal — Controls tab', () => { // [NFR-003]
     it('shows Edit buttons for each action', () => {
         renderControlsTab();
         const editBtns = screen.getAllByText('Edit');
-        expect(editBtns).toHaveLength(2);
+        expect(editBtns).toHaveLength(4);
     });
 
     it('clicking Edit enters recording mode ("Press any key...")', () => {
@@ -781,6 +783,39 @@ describe('SettingsModal — Controls tab', () => { // [NFR-003]
         expect(mockUpdateSetting).toHaveBeenCalledWith('keybinds', expect.objectContaining({
             splitAtPlayhead: { key: 'g', ctrl: true, shift: false, alt: false },
         }));
+    });
+});
+
+// ─── SettingsModal — Controls tab: undo / redo ────────────────────────────────
+
+describe('SettingsModal — Controls tab: undo / redo labels', () => { // [NFR-003]
+    const renderControlsTab = () => {
+        render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
+        fireEvent.click(screen.getByText('Controls'));
+    };
+
+    it('shows "Undo" action label in Controls tab', () => {
+        renderControlsTab();
+        expect(screen.getByText('Undo')).toBeInTheDocument();
+    });
+
+    it('shows "Redo" action label in Controls tab', () => {
+        renderControlsTab();
+        expect(screen.getByText('Redo')).toBeInTheDocument();
+    });
+
+    it('renders Ctrl+Z keybind chips for Undo', () => {
+        renderControlsTab();
+        // eslint-disable-next-line testing-library/no-node-access
+        const kbds = Array.from(document.querySelectorAll('kbd')).map(k => k.textContent);
+        expect(kbds).toContain('Z');
+    });
+
+    it('renders Ctrl+Y keybind chips for Redo', () => {
+        renderControlsTab();
+        // eslint-disable-next-line testing-library/no-node-access
+        const kbds = Array.from(document.querySelectorAll('kbd')).map(k => k.textContent);
+        expect(kbds).toContain('Y');
     });
 });
 

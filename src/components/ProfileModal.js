@@ -296,6 +296,8 @@ export function AccountModal({ isOpen, onClose }) {
 const ACTIONS = [
   { key: 'splitAtPlayhead', label: 'Split track at playhead' },
   { key: 'playPause',       label: 'Play / Pause' },
+  { key: 'undo',            label: 'Undo' },
+  { key: 'redo',            label: 'Redo' },
 ];
 
 export function SettingsModal({ isOpen, onClose }) {

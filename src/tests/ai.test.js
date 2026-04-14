@@ -925,6 +925,173 @@ describe('system prompt — effects derived from trackConfig', () => { // [NFR-0
     });
 });
 
+// ─── AIPanel — chips ──────────────────────────────────────────────────────────
+
+describe('AIPanel — chips', () => {
+    it('renders all 6 chip buttons', async () => {
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        expect(screen.getByText('Diagnose mix')).toBeInTheDocument();
+        expect(screen.getByText('Effects chain recipe')).toBeInTheDocument();
+        expect(screen.getByText('Build set order')).toBeInTheDocument();
+        expect(screen.getByText('Health check')).toBeInTheDocument();
+        expect(screen.getByText('Segment advice')).toBeInTheDocument();
+        expect(screen.getByText('Plan transition')).toBeInTheDocument();
+    });
+
+    it('chips are visible even with no tracks loaded', async () => {
+        setupMocks({ mix: { tracks: [] } });
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        expect(screen.getByText('Health check')).toBeInTheDocument();
+        expect(screen.getByText('Plan transition')).toBeInTheDocument();
+    });
+
+    it('clicking "Diagnose mix" prefills the input with starter text', async () => {
+        render(<AIPanel />);
+        const input = await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByText('Diagnose mix'));
+        expect(input.value).toBe('Why does my mix sound ');
+    });
+
+    it('clicking "Effects chain recipe" prefills the input with starter text', async () => {
+        render(<AIPanel />);
+        const input = await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByText('Effects chain recipe'));
+        expect(input.value).toBe('Give me a specific effects chain recipe for a ');
+    });
+
+    it('clicking a prefill chip does not fire a fetch call', async () => {
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByText('Diagnose mix'));
+        expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    it('clicking "Health check" auto-sends an audit message', async () => {
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByText('Health check'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+        const body = getBody();
+        expect(body.messages[0].content).toMatch(/Audit my current mix/i);
+    });
+
+    it('clicking "Segment advice" auto-sends a segment message', async () => {
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByText('Segment advice'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+        expect(getBody().messages[0].content).toMatch(/BPM and segment data/i);
+    });
+
+    it('"Plan transition" with 2 tracks names both tracks in the message', async () => {
+        const tracks = [
+            makeTrack({ title: 'Track Alpha', audioUrl: 'a.mp3' }),
+            makeTrack({ title: 'Track Beta',  audioUrl: 'b.mp3' }),
+        ];
+        setupMocks({ mix: { tracks, getLiveTracks: () => tracks } });
+        const { useMix } = require('../spotify/appContext');
+        useMix.mockReturnValue({ tracks, getLiveTracks: () => tracks });
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByText('Plan transition'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+        const msg = getBody().messages[0].content;
+        expect(msg).toContain('Track Alpha');
+        expect(msg).toContain('Track Beta');
+    });
+
+    it('"Plan transition" with 0 tracks sends a generic fallback message', async () => {
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByText('Plan transition'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+        expect(getBody().messages[0].content).toMatch(/transition between two tracks/i);
+    });
+
+    it('"Build set order" with tracks lists their names', async () => {
+        const tracks = [
+            makeTrack({ title: 'Song One', audioUrl: 'a.mp3' }),
+            makeTrack({ title: 'Song Two', audioUrl: 'b.mp3' }),
+        ];
+        const { useMix } = require('../spotify/appContext');
+        useMix.mockReturnValue({ tracks, getLiveTracks: () => tracks });
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByText('Build set order'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+        const msg = getBody().messages[0].content;
+        expect(msg).toContain('Song One');
+        expect(msg).toContain('Song Two');
+    });
+
+    it('"Build set order" with no tracks sends a generic planning message', async () => {
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByText('Build set order'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(1));
+        expect(getBody().messages[0].content).toMatch(/plan a DJ set order/i);
+    });
+
+    it('chips are disabled while a message is loading', async () => {
+        // Never resolves — keeps loading state
+        global.fetch = jest.fn(() => new Promise(() => {}));
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.change(screen.getByPlaceholderText('Ask for track suggestions…'), {
+            target: { value: 'test' },
+        });
+        fireEvent.click(screen.getByTitle('Send'));
+        // All chips should be disabled now
+        const healthChip = screen.getByRole('button', { name: 'Health check' });
+        expect(healthChip).toBeDisabled();
+    });
+});
+
+// ─── AIPanel — dismissable bias disclosure ────────────────────────────────────
+
+describe('AIPanel — dismissable bias disclosure', () => {
+    it('shows a dismiss (X) button on the bias disclosure', async () => {
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        expect(screen.getByTitle('Dismiss')).toBeInTheDocument();
+    });
+
+    it('clicking dismiss removes the bias disclosure', async () => {
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByTitle('Dismiss'));
+        expect(screen.queryByText(/Heads up/i)).not.toBeInTheDocument();
+    });
+
+    it('disclosure stays dismissed after sending a message in the same chat', async () => {
+        mockFetch('AI response');
+        render(<AIPanel />);
+        const input = await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByTitle('Dismiss'));
+        fireEvent.change(input, { target: { value: 'suggest something' } });
+        fireEvent.click(screen.getByTitle('Send'));
+        await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+        expect(screen.queryByText(/Heads up/i)).not.toBeInTheDocument();
+    });
+
+    it('disclosure reappears in a new chat after being dismissed in the current one', async () => {
+        render(<AIPanel />);
+        await screen.findByPlaceholderText('Ask for track suggestions…');
+        fireEvent.click(screen.getByTitle('Dismiss'));
+        expect(screen.queryByText(/Heads up/i)).not.toBeInTheDocument();
+
+        // Open chat history modal and create a new chat
+        fireEvent.click(screen.getByTitle('Chat History'));
+        const newChatBtn = screen.getAllByText(/New Chat/i).find(el => el.tagName === 'BUTTON');
+        fireEvent.click(newChatBtn);
+
+        // Disclosure should be visible in the new chat
+        expect(await screen.findByText(/Heads up/i)).toBeInTheDocument();
+    });
+});
+
 // ─── AIPanel — context timestamp ─────────────────────────────────────────────
 
 describe('AIPanel — context timestamp', () => { // [FR-029]
