@@ -298,6 +298,11 @@ const ACTIONS = [
   { key: 'playPause',       label: 'Play / Pause' },
   { key: 'undo',            label: 'Undo' },
   { key: 'redo',            label: 'Redo' },
+  { key: 'copySegment',     label: 'Copy segment' },
+  { key: 'pasteSegment',    label: 'Paste segment' },
+  { key: 'deleteSegment',   label: 'Delete segment' },
+  { key: 'loadProject',     label: 'Load project' },
+  { key: 'exportProject',   label: 'Export project' },
 ];
 
 export function SettingsModal({ isOpen, onClose }) {
@@ -400,7 +405,6 @@ export function SettingsModal({ isOpen, onClose }) {
           {activeTab === 'general' && (
             <div className="flex flex-col gap-1">
               {[
-                { label: 'Confirm before deleting tracks', key: 'confirmBeforeDelete' },
                 { label: 'Enable animations', key: 'animationsEnabled' },
               ].map(({ label, key }) => (
                 <div key={key} className="flex items-center justify-between py-3 border-b border-base-800">

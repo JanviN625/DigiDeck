@@ -106,7 +106,7 @@ export default function Header() {
         }
     }, [user]);
 
-    const handleExport = async () => {
+    const handleExport = useCallback(async () => {
         if (renderingFor) return;
         setRenderingFor('export');
         try {
@@ -125,7 +125,25 @@ export default function Header() {
         } finally {
             setRenderingFor(null);
         }
-    };
+    }, [renderingFor, projectName]);
+
+    // Keybinds for load/export — must be after their handler declarations to avoid TDZ
+    useEffect(() => {
+        const handleKeydown = (e) => {
+            const tag = document.activeElement?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
+            if (matchesKeybind(e, settings.keybinds.loadProject)) {
+                e.preventDefault();
+                handleOpenLoad();
+            }
+            if (matchesKeybind(e, settings.keybinds.exportProject)) {
+                e.preventDefault();
+                handleExport();
+            }
+        };
+        window.addEventListener('keydown', handleKeydown);
+        return () => window.removeEventListener('keydown', handleKeydown);
+    }, [settings.keybinds, handleOpenLoad, handleExport]);
 
     // Resolve Profile Data
     const displayName = user?.displayName || user?.email || 'User';

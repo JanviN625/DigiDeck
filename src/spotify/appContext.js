@@ -226,9 +226,11 @@ export function AppProviders({ children }) {
                         ? trackData.title
                         : existing.title;
                     const otherTitles = prev.filter((_, i) => i !== emptyIndex).map(t => t.title);
+                    const slotDefaultSegments = existing.initialSegments ?? [{ id: Date.now(), startPct: 0, endPct: 1, isDeleted: false, isMuted: false, fadeIn: 0, fadeOut: 0, pitch: 0, speed: 1.0, eqLow: 0, eqMid: 0, eqHigh: 0, eqKills: { low: false, mid: false, high: false }, effects: [] }];
                     newTracks[emptyIndex] = {
                         ...existing,
                         initiallyExpanded: true,
+                        initialSegments: slotDefaultSegments,
                         ...trackData,
                         title: getUniqueTrackName(resolvedTitle, otherTitles),
                     };
@@ -251,11 +253,13 @@ export function AppProviders({ children }) {
             const title = trackData.title
                 ? getUniqueTrackName(baseTitle, prev.map(t => t.title))
                 : baseTitle;
+            const defaultSegments = [{ id: Date.now(), startPct: 0, endPct: 1, isDeleted: false, isMuted: false, fadeIn: 0, fadeOut: 0, pitch: 0, speed: 1.0, eqLow: 0, eqMid: 0, eqHigh: 0, eqKills: { low: false, mid: false, high: false }, effects: [] }];
             const newTrack = {
                 id: trackData.id || Date.now() + Math.random(),
                 initiallyExpanded: false,
                 offsetSec: 0,
                 duration: 0,
+                initialSegments: defaultSegments,
                 ...trackData,
                 title,
             };
@@ -296,6 +300,12 @@ export function AppProviders({ children }) {
                 return prev;
             }
 
+            const deepCopySegments = (segs) => (segs || []).map(s => ({
+                ...s,
+                eqKills: { ...(s.eqKills || {}) },
+                effects: (s.effects || []).map(ef => ({ ...ef, params: { ...ef.params } })),
+            }));
+
             const newTrack = {
                 ...src,
                 ...currentValues,
@@ -304,6 +314,7 @@ export function AppProviders({ children }) {
                 sourceId: baseId,
                 offsetSec: currentValues?.offsetSec ?? src.offsetSec ?? 0,
                 initiallyExpanded: true,
+                initialSegments: deepCopySegments(currentValues?.initialSegments ?? src.initialSegments),
             };
             const next = [...prev];
             next.splice(trackIndex + 1, 0, newTrack);

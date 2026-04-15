@@ -54,10 +54,6 @@ describe('DEFAULT_SETTINGS shape', () => { // [NFR-003]
         expect(typeof DEFAULT_SETTINGS).toBe('object');
     });
 
-    it('confirmBeforeDelete defaults to true', () => {
-        expect(DEFAULT_SETTINGS.confirmBeforeDelete).toBe(true);
-    });
-
     it('animationsEnabled defaults to true', () => {
         expect(DEFAULT_SETTINGS.animationsEnabled).toBe(true);
     });
@@ -254,8 +250,8 @@ describe('useSettings — updateSetting', () => {
 
     it('updates a boolean setting', () => {
         const { result } = renderHook(() => useSettings());
-        act(() => { result.current.updateSetting('confirmBeforeDelete', false); });
-        expect(result.current.settings.confirmBeforeDelete).toBe(false);
+        act(() => { result.current.updateSetting('animationsEnabled', false); });
+        expect(result.current.settings.animationsEnabled).toBe(false);
     });
 });
 

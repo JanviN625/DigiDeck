@@ -106,12 +106,16 @@ const defaultUser = {
 
 const defaultSettings = {
     animationsEnabled: true,
-    confirmBeforeDelete: true,
     keybinds: {
         splitAtPlayhead: { key: 's', ctrl: true,  shift: false, alt: false },
         playPause:       { key: ' ', ctrl: false, shift: false, alt: false },
         undo:            { key: 'z', ctrl: true,  shift: false, alt: false },
         redo:            { key: 'y', ctrl: true,  shift: false, alt: false },
+        copySegment:     { key: 'c', ctrl: true,  shift: false, alt: false },
+        pasteSegment:    { key: 'v', ctrl: true,  shift: false, alt: false },
+        deleteSegment:   { key: 'Delete', ctrl: false, shift: false, alt: false },
+        loadProject:     { key: 'o', ctrl: true,  shift: false, alt: false },
+        exportProject:   { key: 'e', ctrl: true,  shift: false, alt: false },
     },
 };
 
@@ -566,7 +570,7 @@ describe('SettingsModal — open/close', () => {
 describe('SettingsModal — tab navigation', () => {
     it('General tab is active by default', () => {
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
-        expect(screen.getByText('Confirm before deleting tracks')).toBeInTheDocument();
+        expect(screen.getByText('Enable animations')).toBeInTheDocument();
     });
 
     it('clicking Controls tab shows keybind action labels', () => {
@@ -586,53 +590,40 @@ describe('SettingsModal — tab navigation', () => {
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
         fireEvent.click(screen.getByText('Controls'));
         fireEvent.click(screen.getByText('General'));
-        expect(screen.getByText('Confirm before deleting tracks')).toBeInTheDocument();
+        expect(screen.getByText('Enable animations')).toBeInTheDocument();
     });
 });
 
 // ─── SettingsModal — General tab ──────────────────────────────────────────────
 
 describe('SettingsModal — General tab', () => { // [NFR-003]
-    it('renders both toggle rows', () => {
+    it('renders the toggle row', () => {
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
-        expect(screen.getByText('Confirm before deleting tracks')).toBeInTheDocument();
         expect(screen.getByText('Enable animations')).toBeInTheDocument();
     });
 
     it('toggle reflects current value (aria-checked)', () => {
-        setupMocks({ settings: { confirmBeforeDelete: true, animationsEnabled: false } });
+        setupMocks({ settings: { animationsEnabled: false } });
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
         const toggles = screen.getAllByRole('switch');
-        const confirmToggle = toggles.find(t => t.getAttribute('aria-checked') === 'true');
-        const animToggle    = toggles.find(t => t.getAttribute('aria-checked') === 'false');
-        expect(confirmToggle).toBeTruthy();
+        const animToggle = toggles.find(t => t.getAttribute('aria-checked') === 'false');
         expect(animToggle).toBeTruthy();
-    });
-
-    it('clicking "Confirm before deleting" toggle calls updateSetting with toggled value', () => {
-        setupMocks({ settings: { confirmBeforeDelete: true } });
-        render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
-        const toggles = screen.getAllByRole('switch');
-        // First switch is confirmBeforeDelete (first row in the list)
-        fireEvent.click(toggles[0]);
-        expect(mockUpdateSetting).toHaveBeenCalledWith('confirmBeforeDelete', false);
     });
 
     it('clicking "Enable animations" toggle calls updateSetting with toggled value', () => {
         setupMocks({ settings: { animationsEnabled: true } });
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
         const toggles = screen.getAllByRole('switch');
-        // Second switch is animationsEnabled
-        fireEvent.click(toggles[1]);
+        fireEvent.click(toggles[0]);
         expect(mockUpdateSetting).toHaveBeenCalledWith('animationsEnabled', false);
     });
 
     it('toggle switches from false → true correctly', () => {
-        setupMocks({ settings: { confirmBeforeDelete: false } });
+        setupMocks({ settings: { animationsEnabled: false } });
         render(<SettingsModal isOpen={true} onClose={mockOnClose} />);
         const toggles = screen.getAllByRole('switch');
         fireEvent.click(toggles[0]);
-        expect(mockUpdateSetting).toHaveBeenCalledWith('confirmBeforeDelete', true);
+        expect(mockUpdateSetting).toHaveBeenCalledWith('animationsEnabled', true);
     });
 });
 
@@ -644,10 +635,13 @@ describe('SettingsModal — Controls tab', () => { // [NFR-003]
         fireEvent.click(screen.getByText('Controls'));
     };
 
-    it('shows both action labels', () => {
+    it('shows all action labels', () => {
         renderControlsTab();
         expect(screen.getByText('Split track at playhead')).toBeInTheDocument();
         expect(screen.getByText('Play / Pause')).toBeInTheDocument();
+        expect(screen.getByText('Copy segment')).toBeInTheDocument();
+        expect(screen.getByText('Paste segment')).toBeInTheDocument();
+        expect(screen.getByText('Delete segment')).toBeInTheDocument();
     });
 
     it('renders the current keybind as kbd chips (Ctrl + S for splitAtPlayhead)', () => {
@@ -664,7 +658,7 @@ describe('SettingsModal — Controls tab', () => { // [NFR-003]
     it('shows Edit buttons for each action', () => {
         renderControlsTab();
         const editBtns = screen.getAllByText('Edit');
-        expect(editBtns).toHaveLength(4);
+        expect(editBtns).toHaveLength(9);
     });
 
     it('clicking Edit enters recording mode ("Press any key...")', () => {

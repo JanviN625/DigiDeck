@@ -139,7 +139,6 @@ const mockApplyFadeOut = jest.fn();
 const mockHandleUpdateTrack = jest.fn();
 
 const defaultSettings = {
-    confirmBeforeDelete: false,
     keybinds: { splitAtPlayhead: { key: 's', ctrl: true, shift: false, alt: false } },
 };
 
@@ -208,17 +207,17 @@ describe('TrackCard — rendering', () => { // [FR-001]
     });
 
     it('renders the artist name', () => {
-        render(<TrackCard {...defaultProps} />);
+        render(<TrackCard {...defaultProps} audioUrl="blob:mock" />);
         expect(screen.getByText('Test Artist')).toBeInTheDocument();
     });
 
     it('renders the BPM value', () => {
-        render(<TrackCard {...defaultProps} />);
+        render(<TrackCard {...defaultProps} audioUrl="blob:mock" />);
         expect(screen.getByText('120')).toBeInTheDocument();
     });
 
     it('renders the key value', () => {
-        render(<TrackCard {...defaultProps} />);
+        render(<TrackCard {...defaultProps} audioUrl="blob:mock" />);
         expect(screen.getByText('C maj')).toBeInTheDocument();
     });
 
@@ -432,47 +431,22 @@ describe('TrackCard — drag state', () => { // [FR-019]
     });
 });
 
-// ─── Confirm-before-delete ────────────────────────────────────────────────────
+// ─── Direct delete (no confirmation) ────────────────────────────────────────
 
-describe('TrackCard — confirm-before-delete (confirmBeforeDelete: true)', () => {
+describe('TrackCard — direct delete', () => {
     beforeEach(() => {
         jest.clearAllMocks();
-        setupMocks([], { confirmBeforeDelete: true });
+        setupMocks([]);
         global.fetch = jest.fn().mockReturnValue(new Promise(() => {}));
         global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
         global.URL.revokeObjectURL = jest.fn();
     });
 
-    it('shows inline confirm UI instead of calling onDelete when trash is clicked', () => {
+    it('calls onDelete immediately when trash button is clicked', () => {
         const onDelete = jest.fn();
         render(<TrackCard {...defaultProps} onDelete={onDelete} />);
         fireEvent.click(screen.getByTitle('Delete track'));
-        expect(screen.getByText('Remove track?')).toBeInTheDocument();
-        expect(onDelete).not.toHaveBeenCalled();
-    });
-
-    it('calls onDelete after clicking Remove in the confirm UI', () => {
-        const onDelete = jest.fn();
-        render(<TrackCard {...defaultProps} onDelete={onDelete} />);
-        fireEvent.click(screen.getByTitle('Delete track'));
-        fireEvent.click(screen.getByText('Remove'));
         expect(onDelete).toHaveBeenCalledTimes(1);
-    });
-
-    it('hides the confirm UI and does not delete after clicking Cancel', () => {
-        const onDelete = jest.fn();
-        render(<TrackCard {...defaultProps} onDelete={onDelete} />);
-        fireEvent.click(screen.getByTitle('Delete track'));
-        fireEvent.click(screen.getByText('Cancel'));
-        expect(onDelete).not.toHaveBeenCalled();
-        expect(screen.queryByText('Remove track?')).not.toBeInTheDocument();
-    });
-
-    it('restores the trash button after Cancel is clicked', () => {
-        render(<TrackCard {...defaultProps} />);
-        fireEvent.click(screen.getByTitle('Delete track'));
-        fireEvent.click(screen.getByText('Cancel'));
-        expect(screen.getByTitle('Delete track')).toBeInTheDocument();
     });
 });
 
@@ -1175,43 +1149,33 @@ describe('TrackCard — audio-drop warning', () => {
 // ─── TrackCard — segment mute button ─────────────────────────────────────────
 
 describe('TrackCard — segment mute button', () => {
-    it('Mute button is visible when card is expanded with audioUrl', () => {
+    it('Mute segment button is removed from UI (use volume effect instead)', () => {
         renderWithSettings({ audioUrl: 'blob:mock' });
-        expect(screen.getByTitle('Mute this segment (Keep visible)')).toBeInTheDocument();
+        expect(screen.queryByTitle('Mute this segment (Keep visible)')).not.toBeInTheDocument();
     });
 
     it('Mute button is not rendered when track has no audioUrl', () => {
         renderWithSettings(); // no audioUrl
-        // The mute/delete buttons are inside the audioUrl section and are not rendered without it
         expect(screen.queryByTitle('Mute this segment (Keep visible)')).not.toBeInTheDocument();
     });
 
-    it('Mute button is disabled when track is hidden (isVisible=false)', () => {
+    it('Mute segment button is not rendered when track is hidden (removed from UI)', () => {
         renderWithSettings({ audioUrl: 'blob:mock' });
-        // Click the eye icon button to hide the track (toggle visibility)
-        // eslint-disable-next-line testing-library/no-node-access
-        const eyeBtn = screen.getByTestId('icon-eye').closest('button');
-        fireEvent.click(eyeBtn);
-        const muteBtn = screen.getByTitle('Mute this segment (Keep visible)');
-        expect(muteBtn).toBeDisabled();
+        expect(screen.queryByTitle('Mute this segment (Keep visible)')).not.toBeInTheDocument();
     });
 });
 
 // ─── TrackCard — segment delete button ───────────────────────────────────────
 
 describe('TrackCard — segment delete button', () => {
-    it('Delete segment button is visible when card is expanded with audioUrl', () => {
+    it('Delete segment button is removed from UI (now keybind-only)', () => {
         renderWithSettings({ audioUrl: 'blob:mock' });
-        expect(screen.getByTitle('Delete this segment (Creates visual gap)')).toBeInTheDocument();
+        expect(screen.queryByTitle('Delete this segment (Creates visual gap)')).not.toBeInTheDocument();
     });
 
-    it('Delete segment button is disabled when track is hidden', () => {
+    it('Delete segment button is not rendered when track is hidden (removed from UI)', () => {
         renderWithSettings({ audioUrl: 'blob:mock' });
-        // eslint-disable-next-line testing-library/no-node-access
-        const eyeBtn = screen.getByTestId('icon-eye').closest('button');
-        fireEvent.click(eyeBtn);
-        const deleteBtn = screen.getByTitle('Delete this segment (Creates visual gap)');
-        expect(deleteBtn).toBeDisabled();
+        expect(screen.queryByTitle('Delete this segment (Creates visual gap)')).not.toBeInTheDocument();
     });
 });
 
