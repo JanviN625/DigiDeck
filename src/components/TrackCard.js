@@ -196,6 +196,7 @@ export default function TrackCard({
     const currentTimePctRef = useRef(0);
     const durationRef = useRef(0);
     const fadeOutTriggeredRef = useRef(false);
+    const rampOutTriggeredRef = useRef(false);
     const beatPositionsRef = useRef(beatPositions);
     const adjustedBeatPositionsRef = useRef(null);
     const scrollContainerRef = useRef(null);
@@ -258,11 +259,18 @@ export default function TrackCard({
         adjustedBeatPositionsRef.current = adjustedBeatPositions;
     }, [adjustedBeatPositions]);
 
+    const originalBpmRef = useRef(null);
+    useEffect(() => {
+        if (originalBpmRef.current === null && bpm && bpm !== '[BPM]' && !isNaN(parseFloat(bpm))) {
+            originalBpmRef.current = parseFloat(bpm);
+        }
+    }, [bpm]);
+
     // Effective BPM = original BPM × current speed. bpm prop is never mutated, so this is always accurate.
     const effectiveBpm = useMemo(() => {
-        const parsed = parseFloat(bpm);
-        if (!bpm || bpm === '[BPM]' || isNaN(parsed)) return null;
-        return Math.round(parsed * parseFloat(speed));
+        const base = originalBpmRef.current ?? parseFloat(bpm);
+        if (!base || isNaN(base)) return null;
+        return Math.round(base * parseFloat(speed));
     }, [bpm, speed]);
 
     // Master BPM beat grid — evenly spaced at 60/masterBpm intervals, phase-locked to the master
@@ -863,6 +871,7 @@ export default function TrackCard({
 
         const liveSegs = segmentsRef.current; // snapshot at drag start (sorted by startPct)
         const startX = e.clientX;
+        const beatGridSnapshot = [...(masterBeatGridRef.current || [])];
 
         // ── REORDER MODE: drag to reorder segments + remap audio buffer ────────
         // Magnet ON = snap to nearest beat during drag. Magnet OFF = free reorder without snap.
@@ -880,21 +889,33 @@ export default function TrackCard({
         const handleMouseMove = (moveEvent) => {
             let dx = moveEvent.clientX - startX;
 
-            // Snap left edge of dragged segment to nearest master beat grid line (12px radius).
+            // Snap dragged segment (left OR right edge) to the combined beat grid (12px radius).
             // Only snaps when magnet is ON — magnet OFF allows free reorder without snapping.
             if (isMagnetOnRef.current) {
-                const beats = masterBeatGridRef.current;
-                if (beats.length > 0 && audioDuration > 0 && laneWidth > 0) {
+                if (beatGridSnapshot.length > 0 && audioDuration > 0 && laneWidth > 0) {
                     const newStartPct = seg.startPct + dx / laneWidth;
                     const newStartSec = newStartPct * audioDuration;
-                    let nearestBeat = beats[0], minDist = Math.abs(newStartSec - beats[0]);
-                    for (const b of beats) {
-                        const d = Math.abs(newStartSec - b);
-                        if (d < minDist) { minDist = d; nearestBeat = b; }
+                    const segDurationSec = (seg.endPct - seg.startPct) * audioDuration;
+                    const newEndSec = newStartSec + segDurationSec;
+                    
+                    let minLeftDist = Infinity, nearestLeftBeat = 0;
+                    let minRightDist = Infinity, nearestRightBeat = 0;
+
+                    for (const b of beatGridSnapshot) {
+                        const dLeft = Math.abs(newStartSec - b);
+                        if (dLeft < minLeftDist) { minLeftDist = dLeft; nearestLeftBeat = b; }
+
+                        const dRight = Math.abs(newEndSec - b);
+                        if (dRight < minRightDist) { minRightDist = dRight; nearestRightBeat = b; }
                     }
+
                     const snapThresholdSec = (12 / laneWidth) * audioDuration;
-                    if (minDist < snapThresholdSec) {
-                        dx = (nearestBeat / audioDuration - seg.startPct) * laneWidth;
+                    
+                    // Snap to the edge that is closest to a beat grid line
+                    if (minLeftDist < snapThresholdSec && minLeftDist <= minRightDist) {
+                        dx = (nearestLeftBeat / audioDuration - seg.startPct) * laneWidth;
+                    } else if (minRightDist < snapThresholdSec && minRightDist < minLeftDist) {
+                        dx = ((nearestRightBeat - segDurationSec) / audioDuration - seg.startPct) * laneWidth;
                     }
                 }
             }
@@ -1308,6 +1329,7 @@ export default function TrackCard({
                 if (startSeg?.fadeIn > 0) applyFadeIn(startSeg.fadeIn);
             }
             fadeOutTriggeredRef.current = false;
+            rampOutTriggeredRef.current = false;
         } else {
             pause();
         }
@@ -1329,7 +1351,7 @@ export default function TrackCard({
             initialSegments: segmentsRef.current,
         }, true); // TRUE: Skip generic tracker history stack pollution for visual layout syncs!
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [trackName, volume, globalZoom, isExpanded, segments, handleUpdateTrack, trackId]);
+    }, [trackName, volume, globalZoom, isExpanded, segments, handleUpdateTrack, trackId, isDuplicateName]);
 
     // Setup polling for playhead sync + fade-out trigger.
     // Position is read from SoundTouch's stSource.position (in samples) so it
@@ -1373,6 +1395,7 @@ export default function TrackCard({
                 if (playingSeg && playingSeg.id !== playingSegmentIdRef.current) {
                     playingSegmentIdRef.current = playingSeg.id;
                     fadeOutTriggeredRef.current = false;
+                    rampOutTriggeredRef.current = false;
                     const segKills = playingSeg.eqKills || { low: false, mid: false, high: false };
                     AudioEngineService.setPitch(trackId, playingSeg.pitch);
                     AudioEngineService.setSpeed(trackId, playingSeg.speed);
@@ -1418,17 +1441,37 @@ export default function TrackCard({
                         setEqKills(playingSeg.eqKills || { low: false, mid: false, high: false });
                         setEffects(newEffects);
                         setIsSegmentMuted(playingSeg.isDeleted || playingSeg.isMuted || false);
+
+                        // Trigger rampIn effects when entering the segment
+                        const filterEffect = newEffects.find(e => e.type === 'filter' && e.enabled);
+                        if (filterEffect && filterEffect.params.rampIn > 0) {
+                            const startFreq = filterEffect.params.filterType === 'highpass' ? 20000 : 20;
+                            AudioEngineService.applyEffectRamp(trackId, filterEffect.id, 'frequency', startFreq, filterEffect.params.frequency, filterEffect.params.rampIn);
+                        }
                     }
                 }
 
-                // Per-segment fade-out: trigger when within fadeOut seconds of THIS segment's end,
-                // not the track end — so every segment's fade-out fires at the right time.
-                if (playingSeg && !fadeOutTriggeredRef.current && playingSeg.fadeOut > 0) {
+                if (playingSeg) {
                     const segEndSec = playingSeg.endPct * track.audioBuffer.duration;
                     const remaining = segEndSec - audioPosSec;
-                    if (remaining <= playingSeg.fadeOut && remaining > 0) {
+
+                    // Per-segment fade-out: trigger when within fadeOut seconds of THIS segment's end
+                    if (!fadeOutTriggeredRef.current && playingSeg.fadeOut > 0 && remaining <= playingSeg.fadeOut && remaining > 0) {
                         fadeOutTriggeredRef.current = true;
                         applyFadeOut(remaining);
+                    }
+
+                    // Per-segment rampOut: trigger when within rampOut seconds of THIS segment's end
+                    if (!rampOutTriggeredRef.current) {
+                        const filterEffect = (playingSeg.effects || []).find(e => e.type === 'filter' && e.enabled);
+                        if (filterEffect && filterEffect.params.rampOut > 0 && remaining <= filterEffect.params.rampOut && remaining > 0) {
+                            rampOutTriggeredRef.current = true;
+                            const endFreq = filterEffect.params.filterType === 'highpass' ? 20000 : 20;
+                            const activeFilterId = effectsRef.current.find(e => e.type === 'filter')?.id;
+                            if (activeFilterId != null) {
+                                AudioEngineService.applyEffectRamp(trackId, activeFilterId, 'frequency', filterEffect.params.frequency, endFreq, filterEffect.params.rampOut);
+                            }
+                        }
                     }
                 }
 
@@ -1516,7 +1559,7 @@ export default function TrackCard({
                                 <span className="text-base-300 font-medium whitespace-nowrap hidden md:inline">BPM:</span>
                                 {bpm === '[BPM]' && isAnalysing
                                     ? <span className="w-3 h-3 rounded-full border border-base-600 border-t-base-300 animate-spin inline-block" />
-                                    : <span className="text-base-200 whitespace-nowrap">{bpm}</span>
+                                    : <span className="text-base-200 whitespace-nowrap">{effectiveBpm !== '[BPM]' ? Math.round(effectiveBpm) : bpm}</span>
                                 }
                             </span>
                             <div className="w-1 h-1 shrink-0 rounded-full bg-base-600 hidden xs:block"></div>
@@ -1774,20 +1817,28 @@ export default function TrackCard({
                         <div 
                             className="absolute top-0 bottom-0 flex flex-col bg-base-900 border border-base-700 shadow-xl rounded overflow-hidden"
                             style={{
-                                width: masterDuration > 0 && effectiveDuration > 0
-                                    ? `${(effectiveDuration / masterDuration) * 100}%`
-                                    : '100%',
-                                left: masterDuration > 0 ? `${(offsetSec / masterDuration) * 100}%` : '0%',
+                                width: '100%',
+                                left: '0%',
                                 transition: isDragged ? 'none' : 'left 0.1s ease-out'
                             }}
                         >
                             {/* Consolidated Scroll Viewport for Syncing WaveSurfer and Bars Natively */}
                             <div
                                 ref={scrollContainerRef}
-                                className="relative flex-1 min-w-full overflow-x-auto overflow-y-hidden scrollbar-hide bg-base-900"
+                                className="relative flex-1 min-w-full overflow-x-auto overflow-y-hidden custom-scrollbar bg-base-900"
                             >
                                 {/* Inner Track Scale Canvas — stretches to waveformPixelWidth so native scrolling captures everything */}
-                                <div style={{ width: waveformPixelWidth > 0 ? waveformPixelWidth : '100%', minWidth: '100%', height: '100%', position: 'relative' }}>
+                                <div style={{ 
+                                    width: waveformPixelWidth > 0 
+                                        ? waveformPixelWidth 
+                                        : (masterDuration > 0 && effectiveDuration > 0 ? `${(effectiveDuration / masterDuration) * 100}%` : '100%'), 
+                                    minWidth: waveformPixelWidth > 0 
+                                        ? Math.max(scrollContainerRef.current?.clientWidth || 0, waveformPixelWidth) 
+                                        : (masterDuration > 0 && effectiveDuration > 0 ? `${(effectiveDuration / masterDuration) * 100}%` : '100%'), 
+                                    height: '100%', 
+                                    position: 'relative',
+                                    marginLeft: masterDuration > 0 ? `${(offsetSec / masterDuration) * 100}%` : '0%'
+                                }}>
                                     
                                     {/* WaveSurfer rendering target */}
                                     <div ref={waveformRef} className="absolute inset-0"></div>
@@ -1821,6 +1872,33 @@ export default function TrackCard({
                                                 );
                                             }
                                             return overlays;
+                                        })}
+
+                                        {/* Effect Selection overlays */}
+                                        {audioDuration > 0 && segments.flatMap(seg => {
+                                            const activeEffects = (seg.effects || []).filter(e => e.enabled);
+                                            if (!activeEffects.length) return [];
+                                            return activeEffects.map((eff, i) => {
+                                                const colorMap = {
+                                                    reverb: 'bg-indigo-400/50',
+                                                    delay: 'bg-cyan-400/50',
+                                                    compressor: 'bg-yellow-400/50',
+                                                    filter: 'bg-green-400/50',
+                                                    panner: 'bg-pink-400/50',
+                                                    volume: 'bg-orange-400/50',
+                                                };
+                                                const color = colorMap[eff.type] || 'bg-base-400/50';
+                                                const left = localZoom > 0 ? seg.startPct * waveformPixelWidth : `${seg.startPct * 100}%`;
+                                                const width = localZoom > 0 ? (seg.endPct - seg.startPct) * waveformPixelWidth : `${(seg.endPct - seg.startPct) * 100}%`;
+                                                const bottom = `${6 + i * 6}px`;
+                                                return (
+                                                    <div
+                                                        key={`fx-${seg.id}-${eff.type}-${i}`}
+                                                        className={`absolute h-1.5 pointer-events-none z-[50] rounded-full ${color} shadow-sm backdrop-blur-sm opacity-90`}
+                                                        style={{ left, width, bottom }}
+                                                    />
+                                                );
+                                            });
                                         })}
 
                                         {/* Master BPM beat grid — faint phase-locked lines, visible at localZoom >= 65 */}
@@ -2081,7 +2159,7 @@ export default function TrackCard({
                                                         onBlur={(e) => {
                                                             e.stopPropagation();
                                                             const targetBpm = parseFloat(e.target.value);
-                                                            const originalBpm = parseFloat(bpm); // always the original analyzed BPM
+                                                            const originalBpm = originalBpmRef.current ?? parseFloat(bpm); // always the original analyzed BPM
                                                             if (!isNaN(targetBpm) && originalBpm > 0) {
                                                                 const newSpeed = Math.min(SPEED_MAX, Math.max(SPEED_MIN, targetBpm / originalBpm));
                                                                 setSpeedWithSync(newSpeed);

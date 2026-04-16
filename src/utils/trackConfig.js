@@ -12,20 +12,24 @@ export const EFFECT_CONFIGS = {
     },
     filter: {
         label: 'Pass Filter',
-        defaultParams: { filterType: 'highpass', frequency: 300 },
+        defaultParams: { filterType: 'highpass', frequency: 300, rampIn: 0, rampOut: 0 },
         paramDefs: [
             { key: 'filterType', label: 'Type', type: 'select', options: [
                 { value: 'highpass', label: 'High-pass' },
                 { value: 'lowpass',  label: 'Low-pass'  },
             ]},
             { key: 'frequency', label: 'Cutoff', min: 20, max: 20000, step: 1, unit: 'Hz' },
+            { key: 'rampIn',  label: 'Ramp In',  min: 0, max: 30, step: 0.1, unit: 's' },
+            { key: 'rampOut', label: 'Ramp Out', min: 0, max: 30, step: 0.1, unit: 's' },
         ],
     },
     panner: {
         label: 'Stereo Pan',
-        defaultParams: { pan: 0 },
+        defaultParams: { pan: 0, lfoRate: 0, lfoDepth: 1.0 },
         paramDefs: [
             { key: 'pan', label: 'Pan', min: -1, max: 1, step: 0.01 },
+            { key: 'lfoRate', label: 'Auto Rate', min: 0, max: 10, step: 0.1, unit: 'Hz' },
+            { key: 'lfoDepth', label: 'Depth', min: 0, max: 1, step: 0.01 },
         ],
     },
     reverb: {

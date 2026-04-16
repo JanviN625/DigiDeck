@@ -249,8 +249,16 @@ class AudioEngine {
         } else if (effectType === 'panner') {
             const panner = this.ctx.createStereoPanner();
             panner.pan.value = 0;
-            nodes = { inputGain: panner, outputGain: panner };
-            defaultParams = { pan: 0 };
+            const lfo = this.ctx.createOscillator();
+            const lfoGain = this.ctx.createGain();
+            lfo.type = 'sine';
+            lfo.frequency.value = 0; // 0 = static (off)
+            lfoGain.gain.value = 1.0; // depth
+            lfo.connect(lfoGain);
+            lfoGain.connect(panner.pan);
+            lfo.start();
+            nodes = { inputGain: panner, outputGain: panner, lfo, lfoGain };
+            defaultParams = { pan: 0, lfoRate: 0, lfoDepth: 1.0 };
         } else {
             return null;
         }
@@ -312,6 +320,8 @@ class AudioEngine {
             if (param === 'frequency') effect.nodes.inputGain.frequency.value = value;
         } else if (effect.type === 'panner') {
             if (param === 'pan') effect.nodes.inputGain.pan.value = value;
+            if (param === 'lfoRate') effect.nodes.lfo.frequency.value = value;
+            if (param === 'lfoDepth') effect.nodes.lfoGain.gain.value = value;
         }
     }
 
@@ -329,6 +339,10 @@ class AudioEngine {
             safe(nodes.feedback);
             safe(nodes.wetGain);
             safe(nodes.dryGain);
+        } else if (type === 'panner') {
+            try { nodes.lfo.stop(); } catch {}
+            try { nodes.lfo.disconnect(); } catch {}
+            try { nodes.lfoGain.disconnect(); } catch {}
         }
     }
 
@@ -565,6 +579,24 @@ class AudioEngine {
         }
 
         return await offlineCtx.startRendering();
+    }
+
+    applyEffectRamp(trackId, effectId, param, fromVal, toVal, durationSec) {
+        const track = this.tracks.get(trackId);
+        if (!track) return;
+        const effect = track.effects.find(e => e.id === effectId);
+        if (!effect) return;
+
+        let audioParam = null;
+        if (effect.type === 'filter' && param === 'frequency') {
+            audioParam = effect.nodes.inputGain.frequency;
+        }
+        
+        if (audioParam) {
+            audioParam.cancelScheduledValues(this.ctx.currentTime);
+            audioParam.setValueAtTime(fromVal, this.ctx.currentTime);
+            audioParam.linearRampToValueAtTime(toVal, this.ctx.currentTime + durationSec);
+        }
     }
 
     applySegmentAudio(trackId, { pitch, speed, eqLow, eqMid, eqHigh }) {

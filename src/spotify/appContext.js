@@ -204,7 +204,8 @@ export function AppProviders({ children }) {
 
     const commitCurrentState = useCallback(() => {
         setTracks(prev => {
-            commitHistory(prev);
+            const currentTracks = [...prev];
+            setTimeout(() => commitHistory(currentTracks), 0);
             return prev;
         });
     }, [commitHistory, setTracks]);
@@ -226,7 +227,7 @@ export function AppProviders({ children }) {
                         ? trackData.title
                         : existing.title;
                     const otherTitles = prev.filter((_, i) => i !== emptyIndex).map(t => t.title);
-                    const slotDefaultSegments = existing.initialSegments ?? [{ id: Date.now(), startPct: 0, endPct: 1, isDeleted: false, isMuted: false, fadeIn: 0, fadeOut: 0, pitch: 0, speed: 1.0, eqLow: 0, eqMid: 0, eqHigh: 0, eqKills: { low: false, mid: false, high: false }, effects: [], masterTimePct: null }];
+                    const slotDefaultSegments = [{ id: Date.now(), startPct: 0, endPct: 1, isDeleted: false, isMuted: false, fadeIn: 0, fadeOut: 0, pitch: 0, speed: 1.0, eqLow: 0, eqMid: 0, eqHigh: 0, eqKills: { low: false, mid: false, high: false }, effects: [], masterTimePct: null }];
                     newTracks[emptyIndex] = {
                         ...existing,
                         initiallyExpanded: true,
@@ -370,7 +371,9 @@ export function AppProviders({ children }) {
 
     const handleOverwriteTracks = useCallback((newTracksArray, skipHistory = false) => {
         setTracks(prev => {
-            if (!skipHistory) commitHistory(newTracksArray);
+            if (!skipHistory) {
+                setTimeout(() => commitHistory(newTracksArray), 0);
+            }
             return newTracksArray;
         });
     }, [commitHistory, setTracks]);

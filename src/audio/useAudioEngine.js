@@ -16,6 +16,8 @@ export const useAudioEngine = (trackId) => {
     const setEffectParam = useCallback((effectId, param, value) => AudioEngine.setEffectParam(trackId, effectId, param, value), [trackId]);
     const applyFadeIn = useCallback((seconds) => AudioEngine.applyFadeIn(trackId, seconds), [trackId]);
     const applyFadeOut = useCallback((seconds) => AudioEngine.applyFadeOut(trackId, seconds), [trackId]);
+    const applyEffectRamp = useCallback((effectId, param, fromVal, toVal, durationSec) => 
+        AudioEngine.applyEffectRamp(trackId, effectId, param, fromVal, toVal, durationSec), [trackId]);
 
     // Ensure cleanup of resources on unmount if this hook represents the track lifecycle
     useEffect(() => {
@@ -26,6 +28,6 @@ export const useAudioEngine = (trackId) => {
 
     return {
         play, pause, seek, setVolume, setPitch, setSpeed,
-        setEQ, addEffect, removeEffect, setEffectEnabled, setEffectParam, applyFadeIn, applyFadeOut
+        setEQ, addEffect, removeEffect, setEffectEnabled, setEffectParam, applyFadeIn, applyFadeOut, applyEffectRamp
     };
 };
