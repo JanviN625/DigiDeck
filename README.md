@@ -2,8 +2,6 @@
 
 **License:** AGPL-3.0 | **Stack:** React 19 · Firebase · Vercel · Anthropic claude-haiku-4-5 · WaveSurfer.js · Essentia.js · SoundTouch.js · Spotify API · AudD API
 
-> This README is a trust argument. It documents what the system does, where AI is involved, what evidence supports the trust claims, and where the system is known to fail or fall short.
-
 ---
 
 ## 1. System Overview
