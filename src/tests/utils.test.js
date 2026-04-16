@@ -54,10 +54,6 @@ describe('DEFAULT_SETTINGS shape', () => { // [NFR-003]
         expect(typeof DEFAULT_SETTINGS).toBe('object');
     });
 
-    it('confirmBeforeDelete defaults to true', () => {
-        expect(DEFAULT_SETTINGS.confirmBeforeDelete).toBe(true);
-    });
-
     it('animationsEnabled defaults to true', () => {
         expect(DEFAULT_SETTINGS.animationsEnabled).toBe(true);
     });
@@ -254,8 +250,45 @@ describe('useSettings — updateSetting', () => {
 
     it('updates a boolean setting', () => {
         const { result } = renderHook(() => useSettings());
-        act(() => { result.current.updateSetting('confirmBeforeDelete', false); });
-        expect(result.current.settings.confirmBeforeDelete).toBe(false);
+        act(() => { result.current.updateSetting('animationsEnabled', false); });
+        expect(result.current.settings.animationsEnabled).toBe(false);
+    });
+});
+
+describe('useSettings — keybind deep merge', () => {
+    beforeEach(() => { localStorage.clear(); });
+    afterEach(() => { localStorage.clear(); });
+
+    it('fills in missing undo/redo keybinds from defaults when old localStorage lacks them', () => {
+        // Simulate old localStorage that has keybinds but no undo or redo entries
+        const oldSettings = {
+            keybinds: {
+                splitAtPlayhead: { key: 's', ctrl: true,  shift: false, alt: false },
+                playPause:       { key: ' ', ctrl: false, shift: false, alt: false },
+            },
+        };
+        localStorage.setItem('digideck_settings', JSON.stringify(oldSettings));
+        const { result } = renderHook(() => useSettings());
+        expect(result.current.settings.keybinds.undo).toEqual({ key: 'z', ctrl: true, shift: false, alt: false });
+        expect(result.current.settings.keybinds.redo).toEqual({ key: 'y', ctrl: true, shift: false, alt: false });
+    });
+
+    it('preserves existing keybind overrides while filling in new defaults', () => {
+        const oldSettings = {
+            keybinds: {
+                splitAtPlayhead: { key: 'q', ctrl: false, shift: false, alt: false },
+            },
+        };
+        localStorage.setItem('digideck_settings', JSON.stringify(oldSettings));
+        const { result } = renderHook(() => useSettings());
+        // User override preserved
+        expect(result.current.settings.keybinds.splitAtPlayhead).toEqual(
+            { key: 'q', ctrl: false, shift: false, alt: false }
+        );
+        // New default filled in
+        expect(result.current.settings.keybinds.undo).toEqual(
+            DEFAULT_SETTINGS.keybinds.undo
+        );
     });
 });
 

@@ -90,6 +90,10 @@ const mockSignOut = jest.fn();
 const mockSetUniversalIsPlaying = jest.fn();
 const mockTriggerMasterStop = jest.fn();
 const mockHandleOverwriteTracks = jest.fn();
+const mockHandleUndo = jest.fn();
+const mockHandleRedo = jest.fn();
+const mockHandleClearAllTracks = jest.fn();
+const mockSetMasterBpm = jest.fn();
 
 const setupMocks = (overrides = {}) => {
     const { useFirebaseAuth } = require('../firebase/firebase');
@@ -118,6 +122,13 @@ const setupMocks = (overrides = {}) => {
         setUniversalIsPlaying: mockSetUniversalIsPlaying,
         triggerMasterStop: mockTriggerMasterStop,
         handleOverwriteTracks: mockHandleOverwriteTracks,
+        handleUndo: mockHandleUndo,
+        handleRedo: mockHandleRedo,
+        handleClearAllTracks: mockHandleClearAllTracks,
+        masterBpm: 128,
+        setMasterBpm: mockSetMasterBpm,
+        globalZoom: 0,
+        setGlobalZoom: jest.fn(),
         ...((overrides.mix) || {}),
     });
 };
@@ -266,24 +277,11 @@ describe('Header — Export and Mix Preview', () => { // [NFR-009]
         expect(screen.getByText('Export')).toBeInTheDocument();
     });
 
-    it('renders a Mix Preview button', () => {
-        render(<Header />);
-        expect(screen.getByText('Mix Preview')).toBeInTheDocument();
-    });
-
     it('clicking Export calls AudioEngineService.renderOffline', async () => {
         const AudioEngine = require('../audio/AudioEngine').default;
         AudioEngine.renderOffline.mockResolvedValue(null);
         render(<Header />);
         fireEvent.click(screen.getByText('Export'));
-        await waitFor(() => expect(AudioEngine.renderOffline).toHaveBeenCalled());
-    });
-
-    it('clicking Mix Preview calls AudioEngineService.renderOffline', async () => {
-        const AudioEngine = require('../audio/AudioEngine').default;
-        AudioEngine.renderOffline.mockResolvedValue(null);
-        render(<Header />);
-        fireEvent.click(screen.getByText('Mix Preview'));
         await waitFor(() => expect(AudioEngine.renderOffline).toHaveBeenCalled());
     });
 
@@ -442,5 +440,216 @@ describe('Header — Load project', () => { // [FR-028]
         fireEvent.click(screen.getByText('Load'));
 
         expect(await screen.findByText('Failed to load projects.')).toBeInTheDocument();
+    });
+});
+
+// ─── Keybinds — undo / redo ───────────────────────────────────────────────────
+
+describe('Header — keybinds: undo / redo', () => { // [NFR-003]
+    const realMatchesKeybind = jest.requireActual('../utils/useSettings').matchesKeybind;
+
+    beforeEach(() => {
+        const { matchesKeybind, useSettings } = require('../utils/useSettings');
+        // Use the real implementation so Ctrl+Z / Ctrl+Y are correctly detected
+        matchesKeybind.mockImplementation(realMatchesKeybind);
+        // Provide keybinds including undo and redo
+        useSettings.mockReturnValue({
+            settings: {
+                animationsEnabled: true,
+                keybinds: {
+                    playPause:       { key: ' ', ctrl: false, shift: false, alt: false },
+                    splitAtPlayhead: { key: 'x', ctrl: false, shift: false, alt: false },
+                    saveProject:     { key: 's', ctrl: true,  shift: false, alt: false },
+                    undo:            { key: 'z', ctrl: true,  shift: false, alt: false },
+                    redo:            { key: 'y', ctrl: true,  shift: false, alt: false },
+                },
+            },
+        });
+    });
+
+    it('Ctrl+Z calls handleUndo', () => {
+        render(<Header />);
+        fireEvent.keyDown(window, { key: 'z', ctrlKey: true, shiftKey: false, altKey: false });
+        expect(mockHandleUndo).toHaveBeenCalledTimes(1);
+    });
+
+    it('Ctrl+Y calls handleRedo', () => {
+        render(<Header />);
+        fireEvent.keyDown(window, { key: 'y', ctrlKey: true, shiftKey: false, altKey: false });
+        expect(mockHandleRedo).toHaveBeenCalledTimes(1);
+    });
+
+    it('Ctrl+Z does not call handleRedo', () => {
+        render(<Header />);
+        fireEvent.keyDown(window, { key: 'z', ctrlKey: true, shiftKey: false, altKey: false });
+        expect(mockHandleRedo).not.toHaveBeenCalled();
+    });
+
+    it('Z without Ctrl does not call handleUndo', () => {
+        render(<Header />);
+        fireEvent.keyDown(window, { key: 'z', ctrlKey: false, shiftKey: false, altKey: false });
+        expect(mockHandleUndo).not.toHaveBeenCalled();
+    });
+
+    it('Y without Ctrl does not call handleRedo', () => {
+        render(<Header />);
+        fireEvent.keyDown(window, { key: 'y', ctrlKey: false, shiftKey: false, altKey: false });
+        expect(mockHandleRedo).not.toHaveBeenCalled();
+    });
+});
+
+// ─── Reset workspace ──────────────────────────────────────────────────────────
+
+describe('Header — reset workspace', () => { // [FR-003]
+    it('"Reset workspace?" text is not shown by default', () => {
+        render(<Header />);
+        expect(screen.queryByText('Reset workspace?')).not.toBeInTheDocument();
+    });
+
+    it('clicking Reset button shows confirmation UI ("Reset workspace?")', () => {
+        render(<Header />);
+        fireEvent.click(screen.getByTitle('Remove all tracks and start fresh'));
+        expect(screen.getByText('Reset workspace?')).toBeInTheDocument();
+    });
+
+    it('clicking the Reset confirm button calls handleClearAllTracks', () => {
+        render(<Header />);
+        fireEvent.click(screen.getByTitle('Remove all tracks and start fresh'));
+        // The confirm button has text "Reset" inside the confirmation UI
+        const buttons = screen.getAllByRole('button', { name: 'Reset' });
+        // The confirmation Reset button is inside the "Reset workspace?" inline dialog
+        // eslint-disable-next-line testing-library/no-node-access
+        const confirmBtn = buttons.find(b => b.closest('[class*="animate-in"]'));
+        fireEvent.click(confirmBtn);
+        expect(mockHandleClearAllTracks).toHaveBeenCalledTimes(1);
+    });
+
+    it('clicking Cancel hides the confirm UI', () => {
+        render(<Header />);
+        fireEvent.click(screen.getByTitle('Remove all tracks and start fresh'));
+        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByText('Reset workspace?')).not.toBeInTheDocument();
+    });
+
+    it('after confirming reset, "Reset workspace?" text is gone', () => {
+        render(<Header />);
+        fireEvent.click(screen.getByTitle('Remove all tracks and start fresh'));
+        const buttons = screen.getAllByRole('button', { name: 'Reset' });
+        // eslint-disable-next-line testing-library/no-node-access
+        const confirmBtn = buttons.find(b => b.closest('[class*="animate-in"]'));
+        fireEvent.click(confirmBtn);
+        expect(screen.queryByText('Reset workspace?')).not.toBeInTheDocument();
+    });
+});
+
+// ─── Transport: stop button ───────────────────────────────────────────────────
+
+describe('Header — transport: stop button', () => { // [FR-003]
+    it('clicking the stop button calls triggerMasterStop', () => {
+        setupMocks({ mix: { tracks: [{ id: 1 }] } });
+        render(<Header />);
+        const transportButtons = screen
+            .getAllByRole('button')
+            // eslint-disable-next-line testing-library/no-node-access
+            .filter(btn => btn.closest('[class*="bg-base-900/60"]'));
+        // Second button in the transport area is the Stop button
+        fireEvent.click(transportButtons[1]);
+        expect(mockTriggerMasterStop).toHaveBeenCalledTimes(1);
+    });
+});
+
+// ─── Master BPM input ─────────────────────────────────────────────────────────
+
+describe('Header — master BPM input', () => { // [FR-003]
+    it('changing the Master BPM input calls setMasterBpm', () => {
+        setupMocks({ mix: { tracks: [{ id: 1 }] } });
+        render(<Header />);
+        const bpmInput = screen.getByTitle('Master BPM');
+        fireEvent.change(bpmInput, { target: { value: '140' } });
+        expect(mockSetMasterBpm).toHaveBeenCalledWith(140);
+    });
+});
+
+// ─── Load project error handling ──────────────────────────────────────────────
+
+describe('Header — load project error handling', () => { // [FR-028]
+    it('shows "Failed to load project." when loadProject throws', async () => {
+        const FirebaseService = require('../firebase/FirebaseService').default;
+        FirebaseService.getUserProjects.mockResolvedValue([
+            { id: 'proj-1', name: 'Summer Mix', tracks: [] },
+        ]);
+        FirebaseService.loadProject.mockRejectedValue(new Error('Network error'));
+
+        setupMocks({ auth: { user: { uid: 'user_123', displayName: 'Test User', email: 'test@test.com', photoURL: null }, signOut: mockSignOut } });
+        render(<Header />);
+        fireEvent.click(screen.getByText('Load'));
+
+        await screen.findByText('Summer Mix');
+        fireEvent.click(screen.getByRole('button', { name: /summer mix/i }));
+
+        expect(await screen.findByText('Failed to load project.')).toBeInTheDocument();
+    });
+});
+
+// ─── Export WAV download ──────────────────────────────────────────────────────
+
+describe('Header — export WAV download', () => { // [NFR-009]
+    beforeEach(() => {
+        global.URL.createObjectURL = jest.fn(() => 'blob:mock-wav');
+        global.URL.revokeObjectURL = jest.fn();
+    });
+
+    it('calls audioBufferToWAV after renderOffline resolves', async () => {
+        const AudioEngine = require('../audio/AudioEngine').default;
+        const { audioBufferToWAV } = require('../audio/AudioEngine');
+        const fakeBuffer = { length: 44100, sampleRate: 44100, numberOfChannels: 2 };
+        AudioEngine.renderOffline.mockResolvedValue(fakeBuffer);
+        audioBufferToWAV.mockReturnValue(new ArrayBuffer(8));
+
+        render(<Header />);
+        fireEvent.click(screen.getByText('Export'));
+
+        await waitFor(() => expect(audioBufferToWAV).toHaveBeenCalledWith(fakeBuffer));
+    });
+
+    it('calls URL.createObjectURL with the WAV blob', async () => {
+        const AudioEngine = require('../audio/AudioEngine').default;
+        const { audioBufferToWAV } = require('../audio/AudioEngine');
+        const fakeBuffer = { length: 44100, sampleRate: 44100, numberOfChannels: 2 };
+        AudioEngine.renderOffline.mockResolvedValue(fakeBuffer);
+        audioBufferToWAV.mockReturnValue(new ArrayBuffer(8));
+
+        render(<Header />);
+        fireEvent.click(screen.getByText('Export'));
+
+        await waitFor(() => expect(global.URL.createObjectURL).toHaveBeenCalled());
+        const arg = global.URL.createObjectURL.mock.calls[0][0];
+        expect(arg).toBeInstanceOf(Blob);
+    });
+
+    it('calls URL.revokeObjectURL after the download anchor clicks', async () => {
+        const AudioEngine = require('../audio/AudioEngine').default;
+        const { audioBufferToWAV } = require('../audio/AudioEngine');
+        const fakeBuffer = { length: 44100, sampleRate: 44100, numberOfChannels: 2 };
+        AudioEngine.renderOffline.mockResolvedValue(fakeBuffer);
+        audioBufferToWAV.mockReturnValue(new ArrayBuffer(8));
+
+        // Stub document.createElement so we can capture anchor click without navigation
+        const realCreate = document.createElement.bind(document);
+        const mockAnchorClick = jest.fn();
+        jest.spyOn(document, 'createElement').mockImplementation((tag) => {
+            if (tag === 'a') {
+                const a = realCreate('a');
+                a.click = mockAnchorClick;
+                return a;
+            }
+            return realCreate(tag);
+        });
+
+        render(<Header />);
+        fireEvent.click(screen.getByText('Export'));
+
+        await waitFor(() => expect(global.URL.revokeObjectURL).toHaveBeenCalled());
+        document.createElement.mockRestore();
     });
 });

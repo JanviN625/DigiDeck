@@ -10,6 +10,16 @@ module.exports = async (req, res) => {
     const { audioUrl } = req.body;
     if (!audioUrl) return res.status(400).json({ error: 'Missing audioUrl' });
 
+    try {
+        const parsed = new URL(audioUrl);
+        if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error();
+        const hostname = parsed.hostname.toLowerCase();
+        if (hostname === 'localhost' || hostname.startsWith('127.') || hostname.startsWith('192.168.') || hostname.startsWith('10.') || hostname === '0.0.0.0' || hostname.endsWith('.local'))
+            throw new Error();
+    } catch {
+        return res.status(400).json({ error: 'Invalid audioUrl' });
+    }
+
     const apiToken = process.env.AUDD_API_TOKEN || 'test';
     try {
         const params = new URLSearchParams({ url: audioUrl, return: 'spotify', api_token: apiToken });

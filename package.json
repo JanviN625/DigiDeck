@@ -28,7 +28,8 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "dev": "react-scripts start",
+    "dev": "concurrently -n \"CRA,API,EMU\" -c \"cyan,green,yellow\" \"react-scripts start\" \"node server.js\" \"firebase emulators:start\"",
+    "api": "node server.js",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
@@ -55,9 +56,10 @@
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.0",
+    "concurrently": "^9.2.1",
     "eslint-config-react-app": "^7.0.1",
+    "express": "^5.2.1",
     "firebase-tools": "^15.7.0",
-    "typescript": "^4.9.5",
-    "vercel": "^50.42.0"
+    "typescript": "^4.9.5"
   }
 }

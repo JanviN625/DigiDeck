@@ -414,6 +414,67 @@ describe('LibraryPanel — file upload', () => { // [FR-016] [FR-021] [FR-022]
 
         expect(uploadBytes).not.toHaveBeenCalled();
     });
+
+    it('shows upload error message when uploadBytes rejects', async () => {
+        const { uploadBytes } = require('firebase/storage');
+        uploadBytes.mockRejectedValueOnce(new Error('Storage quota exceeded'));
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        await act(async () => { await triggerFileUpload('bad.mp3'); });
+        expect(await screen.findByText('Storage quota exceeded')).toBeInTheDocument();
+    });
+
+    it('calls addDoc with the correct metadata after a successful upload', async () => {
+        const { uploadBytes, getDownloadURL } = require('firebase/storage');
+        const { addDoc } = require('firebase/firestore');
+        uploadBytes.mockResolvedValueOnce({});
+        getDownloadURL.mockResolvedValueOnce('https://cdn.example/stem.mp3');
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        await act(async () => { await triggerFileUpload('stem.mp3'); });
+        await waitFor(() => expect(addDoc).toHaveBeenCalled());
+
+        const docData = addDoc.mock.calls[0][1];
+        expect(docData.fileName).toBe('stem.mp3');
+        expect(docData.downloadUrl).toBe('https://cdn.example/stem.mp3');
+        expect(docData.title).toBe('stem'); // filename stem, no fingerprint/id3
+        expect(docData).toHaveProperty('storagePath');
+        expect(docData).toHaveProperty('createdAt');
+    });
+
+    it('calls handleUpdateTrack for missing tracks with matching localFileName', async () => {
+        const { uploadBytes, getDownloadURL } = require('firebase/storage');
+        const { addDoc } = require('firebase/firestore');
+        uploadBytes.mockResolvedValueOnce({});
+        getDownloadURL.mockResolvedValueOnce('https://cdn.example/found.mp3');
+        addDoc.mockResolvedValueOnce({});
+
+        // Override the tracks list so one track is missing and awaits this file
+        const { useMix } = require('../spotify/appContext');
+        useMix.mockReturnValue({
+            handleAddTrack: mockHandleAddTrack,
+            tracks: [{ id: 'track_abc', isMissing: true, localFileName: 'found.mp3', spotifyId: null }],
+            handleUpdateTrack: mockHandleUpdateTrack,
+        });
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => { capturedSnapshotCb({ forEach: () => {} }); });
+
+        await act(async () => { await triggerFileUpload('found.mp3'); });
+        await waitFor(() =>
+            expect(mockHandleUpdateTrack).toHaveBeenCalledWith(
+                'track_abc',
+                { isMissing: false, audioUrl: 'https://cdn.example/found.mp3' }
+            )
+        );
+    });
 });
 
 // ─── Spotify search ───────────────────────────────────────────────────────────
@@ -963,5 +1024,44 @@ describe('PlaylistModal — close behaviour', () => { // [NFR-007]
         rerender(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={{ ...playlist, id: 'pl2', name: 'Second Playlist' }} />);
         expect(screen.getByText('Loading tracks...')).toBeInTheDocument();
         expect(screen.queryByText('First Song')).not.toBeInTheDocument();
+    });
+});
+
+// ─── Delete marks workspace track as isMissing ────────────────────────────────
+
+describe('LibraryPanel — delete marks workspace track isMissing', () => { // [FR-016]
+    const singleUpload = {
+        id: 'upload_1',
+        data: () => ({
+            title: 'Song To Delete',
+            artistName: 'Artist',
+            downloadUrl: 'https://cdn.example/song.mp3',
+            storagePath: 'uploads/uid_123/song.mp3',
+        }),
+    };
+
+    it('calls handleUpdateTrack with isMissing: true for affected workspace track when file is deleted', async () => {
+        const { deleteObject } = require('firebase/storage');
+        const { deleteDoc } = require('firebase/firestore');
+        deleteObject.mockResolvedValueOnce();
+        deleteDoc.mockResolvedValueOnce();
+
+        // Provide a workspace track whose spotifyId matches 'local-upload_1'
+        const { useMix } = require('../spotify/appContext');
+        useMix.mockReturnValue({
+            handleAddTrack: mockHandleAddTrack,
+            tracks: [{ id: 'wt1', spotifyId: 'local-upload_1' }],
+            handleUpdateTrack: mockHandleUpdateTrack,
+        });
+
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => {
+            capturedSnapshotCb({ forEach: (cb) => cb(singleUpload) });
+        });
+
+        fireEvent.click(screen.getByTitle('Delete file'));
+
+        await waitFor(() => expect(mockHandleUpdateTrack).toHaveBeenCalledWith('wt1', { isMissing: true }));
     });
 });

@@ -67,7 +67,9 @@ export function buildEffectsCapabilities() {
                     if (p.type === 'select') {
                         return `${p.label}: ${p.options.map(o => o.label).join(' | ')}`;
                     }
-                    const range = `${p.min}–${p.max}${p.unit ? ' ' + p.unit : ''}`;
+                    const range = (p.min < 0 && p.max > 0)
+                        ? `–${Math.abs(p.min)} to +${p.max}${p.unit ? ' ' + p.unit : ''}`
+                        : `${p.min}–${p.max}${p.unit ? ' ' + p.unit : ''}`;
                     const def = config.defaultParams[p.key];
                     return `${p.label} ${range}${def !== undefined ? `, default ${def}` : ''}`;
                 })

@@ -2,10 +2,23 @@ import { SoundTouch, SimpleFilter, getWebAudioNode, WebAudioBufferSource } from 
 
 class AudioEngine {
     constructor() {
-        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-        this.masterGain = this.ctx.createGain();
-        this.masterGain.connect(this.ctx.destination);
+        this._ctx = null;
+        this._masterGain = null;
         this.tracks = new Map();
+    }
+
+    get ctx() {
+        if (!this._ctx) {
+            this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+            this._masterGain = this._ctx.createGain();
+            this._masterGain.connect(this._ctx.destination);
+        }
+        return this._ctx;
+    }
+
+    get masterGain() {
+        void this.ctx; // ensure lazy init
+        return this._masterGain;
     }
 
     async loadTrack(trackId, audioBuffer) {

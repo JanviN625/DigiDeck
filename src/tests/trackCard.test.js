@@ -74,6 +74,15 @@ jest.mock('../utils/useSettings', () => ({
             !!e.shiftKey === !!binding.shift &&
             !!e.altKey === !!binding.alt;
     },
+    formatKeybind: (binding) => {
+        if (!binding) return '';
+        const parts = [];
+        if (binding.ctrl)  parts.push('Ctrl');
+        if (binding.alt)   parts.push('Alt');
+        if (binding.shift) parts.push('Shift');
+        parts.push(binding.key === ' ' ? 'Space' : binding.key.toUpperCase());
+        return parts.join(' + ');
+    },
 }));
 
 jest.mock('../utils/helpers', () => ({
@@ -102,6 +111,7 @@ jest.mock('lucide-react', () => {
         X: icon('icon-x'),
         Plus: icon('icon-plus'),
         Power: icon('icon-power'),
+        Magnet: icon('icon-magnet'),
     };
 });
 
@@ -139,7 +149,6 @@ const mockApplyFadeOut = jest.fn();
 const mockHandleUpdateTrack = jest.fn();
 
 const defaultSettings = {
-    confirmBeforeDelete: false,
     keybinds: { splitAtPlayhead: { key: 's', ctrl: true, shift: false, alt: false } },
 };
 
@@ -208,17 +217,17 @@ describe('TrackCard — rendering', () => { // [FR-001]
     });
 
     it('renders the artist name', () => {
-        render(<TrackCard {...defaultProps} />);
+        render(<TrackCard {...defaultProps} audioUrl="blob:mock" />);
         expect(screen.getByText('Test Artist')).toBeInTheDocument();
     });
 
     it('renders the BPM value', () => {
-        render(<TrackCard {...defaultProps} />);
+        render(<TrackCard {...defaultProps} audioUrl="blob:mock" />);
         expect(screen.getByText('120')).toBeInTheDocument();
     });
 
     it('renders the key value', () => {
-        render(<TrackCard {...defaultProps} />);
+        render(<TrackCard {...defaultProps} audioUrl="blob:mock" />);
         expect(screen.getByText('C maj')).toBeInTheDocument();
     });
 
@@ -432,47 +441,22 @@ describe('TrackCard — drag state', () => { // [FR-019]
     });
 });
 
-// ─── Confirm-before-delete ────────────────────────────────────────────────────
+// ─── Direct delete (no confirmation) ────────────────────────────────────────
 
-describe('TrackCard — confirm-before-delete (confirmBeforeDelete: true)', () => {
+describe('TrackCard — direct delete', () => {
     beforeEach(() => {
         jest.clearAllMocks();
-        setupMocks([], { confirmBeforeDelete: true });
+        setupMocks([]);
         global.fetch = jest.fn().mockReturnValue(new Promise(() => {}));
         global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
         global.URL.revokeObjectURL = jest.fn();
     });
 
-    it('shows inline confirm UI instead of calling onDelete when trash is clicked', () => {
+    it('calls onDelete immediately when trash button is clicked', () => {
         const onDelete = jest.fn();
         render(<TrackCard {...defaultProps} onDelete={onDelete} />);
         fireEvent.click(screen.getByTitle('Delete track'));
-        expect(screen.getByText('Remove track?')).toBeInTheDocument();
-        expect(onDelete).not.toHaveBeenCalled();
-    });
-
-    it('calls onDelete after clicking Remove in the confirm UI', () => {
-        const onDelete = jest.fn();
-        render(<TrackCard {...defaultProps} onDelete={onDelete} />);
-        fireEvent.click(screen.getByTitle('Delete track'));
-        fireEvent.click(screen.getByText('Remove'));
         expect(onDelete).toHaveBeenCalledTimes(1);
-    });
-
-    it('hides the confirm UI and does not delete after clicking Cancel', () => {
-        const onDelete = jest.fn();
-        render(<TrackCard {...defaultProps} onDelete={onDelete} />);
-        fireEvent.click(screen.getByTitle('Delete track'));
-        fireEvent.click(screen.getByText('Cancel'));
-        expect(onDelete).not.toHaveBeenCalled();
-        expect(screen.queryByText('Remove track?')).not.toBeInTheDocument();
-    });
-
-    it('restores the trash button after Cancel is clicked', () => {
-        render(<TrackCard {...defaultProps} />);
-        fireEvent.click(screen.getByTitle('Delete track'));
-        fireEvent.click(screen.getByText('Cancel'));
-        expect(screen.getByTitle('Delete track')).toBeInTheDocument();
     });
 });
 
@@ -1083,5 +1067,156 @@ describe('TrackCard — segment split', () => {
 
         const splitCalls = mockHandleUpdateTrack.mock.calls.filter(c => c[1]?.initialSegments);
         expect(splitCalls).toHaveLength(0);
+    });
+});
+
+// ─── TrackCard — fade fields ──────────────────────────────────────────────────
+
+describe('TrackCard — fade fields', () => {
+    it('shows "Fade In" and "Fade Out" labels in the settings panel', () => {
+        renderWithSettings();
+        expect(screen.getByText('Fade In')).toBeInTheDocument();
+        expect(screen.getByText('Fade Out')).toBeInTheDocument();
+    });
+
+    it('fade in field shows 0 by default', () => {
+        renderWithSettings();
+        // Both fade fields render text inputs; the first is Fade In
+        const inputs = screen.getAllByRole('textbox');
+        const fadeInInput = inputs.find(i => i.value === '0');
+        expect(fadeInInput).toBeTruthy();
+    });
+
+    it('entering a valid fade in value updates the display', () => {
+        renderWithSettings();
+        // The fade in input starts at '0'; find by value then change it
+        const inputs = screen.getAllByRole('textbox');
+        const fadeInInput = inputs.find(i => i.value === '0');
+        fireEvent.change(fadeInInput, { target: { value: '2.5' } });
+        expect(fadeInInput.value).toBe('2.5');
+    });
+
+    it('blurring fade in field with invalid text resets to 0', () => {
+        renderWithSettings();
+        const inputs = screen.getAllByRole('textbox');
+        const fadeInInput = inputs.find(i => i.value === '0');
+        fireEvent.change(fadeInInput, { target: { value: 'abc' } });
+        fireEvent.blur(fadeInInput);
+        expect(fadeInInput.value).toBe('0');
+    });
+
+    it('blurring fade in field with negative number resets to 0', () => {
+        renderWithSettings();
+        const inputs = screen.getAllByRole('textbox');
+        const fadeInInput = inputs.find(i => i.value === '0');
+        fireEvent.change(fadeInInput, { target: { value: '-3' } });
+        fireEvent.blur(fadeInInput);
+        expect(fadeInInput.value).toBe('0');
+    });
+
+    it('fade reset button is not shown when fade is 0', () => {
+        renderWithSettings();
+        // The Reset-to-0 button only appears when value !== 0
+        expect(screen.queryByTitle('Reset to 0')).not.toBeInTheDocument();
+    });
+
+    it('fade reset button appears when fade in is non-zero and clicking it resets to 0', () => {
+        renderWithSettings();
+        const inputs = screen.getAllByRole('textbox');
+        const fadeInInput = inputs.find(i => i.value === '0');
+        // Set a valid non-zero value so the reset button appears
+        fireEvent.change(fadeInInput, { target: { value: '2' } });
+        fireEvent.blur(fadeInInput);
+        // Now the reset button should be visible
+        const resetBtn = screen.getByTitle('Reset to 0');
+        expect(resetBtn).toBeInTheDocument();
+        fireEvent.click(resetBtn);
+        expect(fadeInInput.value).toBe('0');
+    });
+});
+
+// ─── TrackCard — audio-drop warning ──────────────────────────────────────────
+
+describe('TrackCard — audio-drop warning', () => {
+    it('dispatching audio-drop event for this track shows a warning', () => {
+        // The warning is rendered inside the settings panel, so we need settings open
+        renderWithSettings();
+        act(() => {
+            window.dispatchEvent(new CustomEvent('audio-drop', { detail: { trackId: 'track_1' } }));
+        });
+        expect(screen.getByText('Audio Processing Drop')).toBeInTheDocument();
+    });
+
+    it('dispatching audio-drop event for a different track does not show warning', () => {
+        renderWithSettings();
+        act(() => {
+            window.dispatchEvent(new CustomEvent('audio-drop', { detail: { trackId: 'track_other' } }));
+        });
+        expect(screen.queryByText('Audio Processing Drop')).not.toBeInTheDocument();
+    });
+});
+
+// ─── TrackCard — segment mute button ─────────────────────────────────────────
+
+describe('TrackCard — segment mute button', () => {
+    it('Mute segment button is removed from UI (use volume effect instead)', () => {
+        renderWithSettings({ audioUrl: 'blob:mock' });
+        expect(screen.queryByTitle('Mute this segment (Keep visible)')).not.toBeInTheDocument();
+    });
+
+    it('Mute button is not rendered when track has no audioUrl', () => {
+        renderWithSettings(); // no audioUrl
+        expect(screen.queryByTitle('Mute this segment (Keep visible)')).not.toBeInTheDocument();
+    });
+
+    it('Mute segment button is not rendered when track is hidden (removed from UI)', () => {
+        renderWithSettings({ audioUrl: 'blob:mock' });
+        expect(screen.queryByTitle('Mute this segment (Keep visible)')).not.toBeInTheDocument();
+    });
+});
+
+// ─── TrackCard — segment delete button ───────────────────────────────────────
+
+describe('TrackCard — segment delete button', () => {
+    it('Delete segment button is removed from UI (now keybind-only)', () => {
+        renderWithSettings({ audioUrl: 'blob:mock' });
+        expect(screen.queryByTitle('Delete this segment (Creates visual gap)')).not.toBeInTheDocument();
+    });
+
+    it('Delete segment button is not rendered when track is hidden (removed from UI)', () => {
+        renderWithSettings({ audioUrl: 'blob:mock' });
+        expect(screen.queryByTitle('Delete this segment (Creates visual gap)')).not.toBeInTheDocument();
+    });
+});
+
+// ─── TrackCard — audioBlob prop path ─────────────────────────────────────────
+
+describe('TrackCard — audioBlob prop path', () => { // [FR-002]
+    it('uses the blob directly and does not call fetch when audioBlob is provided', async () => {
+        const { default: AudioEngine } = require('../audio/AudioEngine');
+        const mockArrayBuffer = new ArrayBuffer(10);
+        const mockAudioBuffer = { numberOfChannels: 1, length: 10, sampleRate: 44100, duration: 0.001, getChannelData: jest.fn(() => new Float32Array(10)) };
+        AudioEngine.ctx.decodeAudioData.mockResolvedValueOnce(mockAudioBuffer);
+        AudioEngine.loadTrack.mockResolvedValueOnce(undefined);
+
+        // Use a plain object so arrayBuffer() is reliably mockable (Blob.arrayBuffer
+        // is absent in the jsdom version used by this project).
+        const audioBlob = { arrayBuffer: jest.fn().mockResolvedValue(mockArrayBuffer) };
+
+        render(
+            <TrackCard
+                {...defaultProps}
+                audioUrl="blob:existing-url"
+                audioBlob={audioBlob}
+                initiallyExpanded={true}
+            />
+        );
+
+        await waitFor(() => expect(AudioEngine.ctx.decodeAudioData).toHaveBeenCalled());
+
+        // Blob path must NOT call fetch
+        expect(global.fetch).not.toHaveBeenCalled();
+        // createObjectURL must have been called (for the blob URL used by WaveSurfer)
+        expect(global.URL.createObjectURL).toHaveBeenCalled();
     });
 });

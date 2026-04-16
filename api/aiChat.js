@@ -29,7 +29,7 @@ module.exports = async (req, res) => {
             model: 'claude-haiku-4-5',
             max_tokens: 1024,
             system: systemPrompt || 'You are a DJ assistant for DigiDeck, a music mashup studio.',
-            messages: messages.slice(-20),
+            messages: messages.slice(-20).map(({ role, content }) => ({ role, content })),
         });
 
         return res.status(200).json({ content: response.content[0].text });
@@ -41,6 +41,6 @@ module.exports = async (req, res) => {
         if (error instanceof Anthropic.RateLimitError) {
             return res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
         }
-        return res.status(500).json({ error: 'Internal Server Error', details: error.message });
+        return res.status(500).json({ error: 'Internal Server Error' });
     }
 };
