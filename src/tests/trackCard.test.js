@@ -1189,6 +1189,107 @@ describe('TrackCard — segment delete button', () => {
     });
 });
 
+// ─── TrackCard — Target BPM mode ─────────────────────────────────────────────
+
+describe('TrackCard — Target BPM mode', () => {
+    it('shows "Speed" label by default when bpm is provided', () => {
+        renderWithSettings({ bpm: '120' });
+        expect(screen.getByTitle('Click to switch to Target BPM input')).toBeInTheDocument();
+    });
+
+    it('clicking the Speed label toggles to Target BPM mode when bpm is known', () => {
+        renderWithSettings({ bpm: '120' });
+        fireEvent.click(screen.getByTitle('Click to switch to Target BPM input'));
+        expect(screen.getByTitle('Click to switch to Speed slider')).toBeInTheDocument();
+    });
+
+    it('clicking Target BPM label toggles back to Speed mode', () => {
+        renderWithSettings({ bpm: '120' });
+        fireEvent.click(screen.getByTitle('Click to switch to Target BPM input'));
+        fireEvent.click(screen.getByTitle('Click to switch to Speed slider'));
+        expect(screen.getByTitle('Click to switch to Target BPM input')).toBeInTheDocument();
+    });
+
+    it('does not toggle to Target BPM mode when bpm is the placeholder', () => {
+        renderWithSettings({ bpm: '[BPM]' });
+        // The toggle button renders with title "Speed" (cursor-default) when bpm is placeholder
+        expect(screen.getByTitle('Speed')).toBeInTheDocument();
+    });
+
+    it('shows a number input when Target BPM mode is active', () => {
+        renderWithSettings({ bpm: '120' });
+        fireEvent.click(screen.getByTitle('Click to switch to Target BPM input'));
+        // Target BPM input is a number input
+        expect(screen.getByRole('spinbutton')).toBeInTheDocument();
+    });
+});
+
+// ─── TrackCard — speed inline edit submit with Enter ─────────────────────────
+
+describe('TrackCard — speed inline edit with Enter', () => {
+    it('pressing Enter in speed inline input commits the value', () => {
+        renderWithSettings();
+        // Click the speed display text to enter edit mode
+        fireEvent.click(screen.getByText('1.00x'));
+        const input = screen.getByDisplayValue('1.00');
+        // Change value and press Enter (which triggers blur)
+        fireEvent.change(input, { target: { value: '1.5' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+        // After Enter, the input blurs, committing the value and returning to display mode
+        // We check mockSetSpeed was called
+        expect(mockSetSpeed).toHaveBeenCalledWith(1.5);
+    });
+});
+
+// ─── TrackCard — key transposition display ────────────────────────────────────
+
+describe('TrackCard — key transposition display', () => {
+    it('updates displayed key when pitch is incremented and trackKey is known', () => {
+        render(<TrackCard {...defaultProps} trackKey="C maj" initiallyExpanded={true} />);
+        fireEvent.click(screen.getByText('Settings'));
+        // Increment pitch by 1 semitone — C → C#
+        fireEvent.click(screen.getByRole('button', { name: '+' }));
+        // handleUpdateTrack is called with the new key via useMix mock
+        expect(mockHandleUpdateTrack).toHaveBeenCalledWith(
+            'track_1',
+            expect.objectContaining({ trackKey: 'C# maj' }),
+            true
+        );
+    });
+
+    it('does not update key when trackKey is the placeholder', () => {
+        render(<TrackCard {...defaultProps} trackKey="[key]" initiallyExpanded={true} />);
+        fireEvent.click(screen.getByText('Settings'));
+        mockHandleUpdateTrack.mockClear();
+        fireEvent.click(screen.getByRole('button', { name: '+' }));
+        // Should NOT have called handleUpdateTrack with trackKey (placeholder should not transpose)
+        const keyUpdateCalls = mockHandleUpdateTrack.mock.calls.filter(c => c[1]?.trackKey);
+        expect(keyUpdateCalls).toHaveLength(0);
+    });
+});
+
+// ─── TrackCard — drag event handlers ─────────────────────────────────────────
+
+describe('TrackCard — drag event handlers', () => {
+    it('calls onDragStart when dragging begins', () => {
+        const onDragStart = jest.fn();
+        const { container } = render(<TrackCard {...defaultProps} onDragStart={onDragStart} />);
+        // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
+        const draggableDiv = container.querySelector('[draggable]');
+        fireEvent.dragStart(draggableDiv);
+        expect(onDragStart).toHaveBeenCalledTimes(1);
+    });
+
+    it('calls onDragEnd when drag ends', () => {
+        const onDragEnd = jest.fn();
+        const { container } = render(<TrackCard {...defaultProps} onDragEnd={onDragEnd} />);
+        // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
+        const draggableDiv = container.querySelector('[draggable]');
+        fireEvent.dragEnd(draggableDiv);
+        expect(onDragEnd).toHaveBeenCalledTimes(1);
+    });
+});
+
 // ─── TrackCard — audioBlob prop path ─────────────────────────────────────────
 
 describe('TrackCard — audioBlob prop path', () => { // [FR-002]

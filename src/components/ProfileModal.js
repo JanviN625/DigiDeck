@@ -296,12 +296,12 @@ export function AccountModal({ isOpen, onClose }) {
 const ACTIONS = [
   { key: 'splitAtPlayhead', label: 'Split track at playhead' },
   { key: 'playPause',       label: 'Play / Pause' },
+  { key: 'saveProject',     label: 'Save project' },
   { key: 'undo',            label: 'Undo' },
   { key: 'redo',            label: 'Redo' },
   { key: 'copySegment',     label: 'Copy segment' },
   { key: 'pasteSegment',    label: 'Paste segment' },
   { key: 'deleteSegment',   label: 'Delete segment' },
-  { key: 'magnetToggle',    label: 'Toggle magnet (segment positioning)' },
   { key: 'loadProject',     label: 'Load project' },
   { key: 'exportProject',   label: 'Export project' },
 ];

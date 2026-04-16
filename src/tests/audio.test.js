@@ -110,6 +110,7 @@ describe('AudioEngine', () => {
             createDelay: jest.fn(() => createNode()),
             createDynamicsCompressor: jest.fn(() => createNode()),
             createStereoPanner: jest.fn(() => createNode()),
+            createOscillator: jest.fn(() => createNode()),
             createBuffer: jest.fn((channels, length, sr) => createMockBuffer(length / sr, sr)),
             createBufferSource: jest.fn(() => createNode()),
             resume: jest.fn().mockResolvedValue(undefined),
@@ -732,6 +733,197 @@ describe('AudioEngine', () => {
 
             // Disabled reverb — createConvolver should NOT be called in offline context
             expect(offlineCtxInstance.createConvolver).not.toHaveBeenCalled();
+        });
+    });
+
+    // ─── applySegmentAudio ──────────────────────────────────────────────────────
+
+    describe('applySegmentAudio', () => { // [FR-018]
+        beforeEach(async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+        });
+
+        it('delegates pitch, speed, and EQ in a single call', () => {
+            AudioEngine.applySegmentAudio('t1', { pitch: 2, speed: 1.2, eqLow: 3, eqMid: -1, eqHigh: 5 });
+            expect(AudioEngine.tracks.get('t1').soundTouch.pitchSemitones).toBe(2);
+            expect(AudioEngine.tracks.get('t1').soundTouch.tempo).toBe(1.2);
+            expect(AudioEngine.tracks.get('t1').eqLow.gain.value).toBe(3);
+            expect(AudioEngine.tracks.get('t1').eqMid.gain.value).toBe(-1);
+            expect(AudioEngine.tracks.get('t1').eqHigh.gain.value).toBe(5);
+        });
+    });
+
+    // ─── stNode teardown on play ─────────────────────────────────────────────
+
+    describe('play — stNode teardown', () => {
+        it('disconnects and nullifies a pre-existing stNode before playing again', async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+            const fakeStNode = { disconnect: jest.fn(), onaudioprocess: null };
+            AudioEngine.tracks.get('t1').stNode = fakeStNode;
+            AudioEngine.tracks.get('t1').isPlaying = false; // not playing so play() runs
+            AudioEngine.play('t1');
+            expect(fakeStNode.disconnect).toHaveBeenCalled();
+            expect(fakeStNode.onaudioprocess).toBeNull();
+        });
+    });
+
+    // ─── addEffect — filter type ─────────────────────────────────────────────
+
+    describe('addEffect — filter type', () => {
+        beforeEach(async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+        });
+
+        it('appends a filter effect with correct default params', () => {
+            AudioEngine.addEffect('t1', 'filter');
+            const eff = AudioEngine.tracks.get('t1').effects[0];
+            expect(eff.type).toBe('filter');
+            expect(eff.params.filterType).toBe('highpass');
+            expect(eff.params.frequency).toBe(300);
+        });
+    });
+
+    // ─── setEffectParam — additional branches ────────────────────────────────
+
+    describe('setEffectParam — additional branches', () => {
+        beforeEach(async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+        });
+
+        it('updates delay mix wet/dry gains', () => {
+            const id = AudioEngine.addEffect('t1', 'delay');
+            AudioEngine.setEffectParam('t1', id, 'mix', 0.4);
+            const eff = AudioEngine.tracks.get('t1').effects[0];
+            expect(eff.nodes.wetGain.gain.value).toBe(0.4);
+            expect(eff.nodes.dryGain.gain.value).toBeCloseTo(0.6);
+        });
+
+        it('updates filter filterType param', () => {
+            const id = AudioEngine.addEffect('t1', 'filter');
+            AudioEngine.setEffectParam('t1', id, 'filterType', 'lowpass');
+            expect(AudioEngine.tracks.get('t1').effects[0].nodes.inputGain.type).toBe('lowpass');
+        });
+
+        it('updates filter frequency param', () => {
+            const id = AudioEngine.addEffect('t1', 'filter');
+            AudioEngine.setEffectParam('t1', id, 'frequency', 800);
+            expect(AudioEngine.tracks.get('t1').effects[0].nodes.inputGain.frequency.value).toBe(800);
+        });
+
+        it('updates panner lfoRate param', () => {
+            const id = AudioEngine.addEffect('t1', 'panner');
+            AudioEngine.setEffectParam('t1', id, 'lfoRate', 2.5);
+            const eff = AudioEngine.tracks.get('t1').effects[0];
+            expect(eff.params.lfoRate).toBe(2.5);
+            expect(eff.nodes.lfo.frequency.value).toBe(2.5);
+        });
+
+        it('updates panner lfoDepth param', () => {
+            const id = AudioEngine.addEffect('t1', 'panner');
+            AudioEngine.setEffectParam('t1', id, 'lfoDepth', 0.5);
+            const eff = AudioEngine.tracks.get('t1').effects[0];
+            expect(eff.params.lfoDepth).toBe(0.5);
+            expect(eff.nodes.lfoGain.gain.value).toBe(0.5);
+        });
+
+        it('updates compressor ratio', () => {
+            const id = AudioEngine.addEffect('t1', 'compressor');
+            AudioEngine.setEffectParam('t1', id, 'ratio', 8);
+            expect(AudioEngine.tracks.get('t1').effects[0].params.ratio).toBe(8);
+        });
+
+        it('updates compressor knee', () => {
+            const id = AudioEngine.addEffect('t1', 'compressor');
+            AudioEngine.setEffectParam('t1', id, 'knee', 5);
+            expect(AudioEngine.tracks.get('t1').effects[0].params.knee).toBe(5);
+        });
+    });
+
+    // ─── renderOffline — effect type coverage ────────────────────────────────
+
+    describe('renderOffline — offline effect chain coverage', () => {
+        const buildOfflineCtxWithOscillator = (sampleRate = 44100) => ({
+            ...createOfflineCtx(sampleRate),
+            createOscillator: jest.fn(() => createNode()),
+        });
+
+        it('includes a delay effect in the offline chain', async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+            AudioEngine.addEffect('t1', 'delay');
+
+            const offlineCtxInstance = buildOfflineCtxWithOscillator();
+            global.OfflineAudioContext.mockImplementationOnce(() => offlineCtxInstance);
+
+            await AudioEngine.renderOffline();
+            expect(offlineCtxInstance.createDelay).toHaveBeenCalled();
+        });
+
+        it('includes a compressor effect in the offline chain', async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+            AudioEngine.addEffect('t1', 'compressor');
+
+            const offlineCtxInstance = buildOfflineCtxWithOscillator();
+            global.OfflineAudioContext.mockImplementationOnce(() => offlineCtxInstance);
+
+            await AudioEngine.renderOffline();
+            expect(offlineCtxInstance.createDynamicsCompressor).toHaveBeenCalled();
+        });
+
+        it('includes a volume effect in the offline chain', async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+            AudioEngine.addEffect('t1', 'volume');
+
+            const offlineCtxInstance = buildOfflineCtxWithOscillator();
+            // Count gain calls before — volume adds one extra
+            global.OfflineAudioContext.mockImplementationOnce(() => offlineCtxInstance);
+
+            await AudioEngine.renderOffline();
+            // createGain is called for eqLow/Mid/High gain nodes + volume node + master gain
+            expect(offlineCtxInstance.createGain.mock.calls.length).toBeGreaterThan(1);
+        });
+
+        it('includes a highpass effect in the offline chain', async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+            AudioEngine.addEffect('t1', 'highpass');
+
+            const offlineCtxInstance = buildOfflineCtxWithOscillator();
+            global.OfflineAudioContext.mockImplementationOnce(() => offlineCtxInstance);
+
+            await AudioEngine.renderOffline();
+            expect(offlineCtxInstance.createBiquadFilter).toHaveBeenCalled();
+        });
+
+        it('includes a lowpass effect in the offline chain', async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+            AudioEngine.addEffect('t1', 'lowpass');
+
+            const offlineCtxInstance = buildOfflineCtxWithOscillator();
+            global.OfflineAudioContext.mockImplementationOnce(() => offlineCtxInstance);
+
+            await AudioEngine.renderOffline();
+            expect(offlineCtxInstance.createBiquadFilter).toHaveBeenCalled();
+        });
+
+        it('includes a panner effect in the offline chain', async () => {
+            await AudioEngine.loadTrack('t1', createMockBuffer());
+            AudioEngine.addEffect('t1', 'panner');
+
+            const offlineCtxInstance = buildOfflineCtxWithOscillator();
+            global.OfflineAudioContext.mockImplementationOnce(() => offlineCtxInstance);
+
+            await AudioEngine.renderOffline();
+            expect(offlineCtxInstance.createStereoPanner).toHaveBeenCalled();
+        });
+
+        it('processes track with non-default pitch via _processBufferOffline', async () => {
+            const buf = createMockBuffer();
+            await AudioEngine.loadTrack('t1', buf);
+            AudioEngine.setPitch('t1', 3); // non-default → _processBufferOffline branches
+
+            const offlineCtxInstance = buildOfflineCtxWithOscillator();
+            global.OfflineAudioContext.mockImplementationOnce(() => offlineCtxInstance);
+
+            await expect(AudioEngine.renderOffline()).resolves.toBeDefined();
         });
     });
 

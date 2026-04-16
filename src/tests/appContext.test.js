@@ -557,6 +557,190 @@ describe('workspace persistence', () => { // [FR-007]
     });
 });
 
+// ─── handleUpdateTrackDuration ───────────────────────────────────────────────
+
+describe('handleUpdateTrackDuration', () => {
+    beforeEach(() => {
+        setupMocks();
+        localStorage.clear();
+    });
+
+    it('sets the duration on the target track', () => {
+        const { result } = renderMix();
+        const trackId = result.current.tracks[0].id;
+        act(() => { result.current.handleUpdateTrackDuration(trackId, 180); });
+        expect(result.current.tracks.find(t => t.id === trackId).duration).toBe(180);
+    });
+
+    it('does not modify other tracks', () => {
+        const { result } = renderMix();
+        const [t1, t2] = result.current.tracks;
+        act(() => { result.current.handleUpdateTrackDuration(t1.id, 90); });
+        expect(result.current.tracks.find(t => t.id === t2.id).duration).toBeUndefined();
+    });
+});
+
+// ─── handleClearAllTracks ─────────────────────────────────────────────────────
+
+describe('handleClearAllTracks', () => {
+    beforeEach(() => {
+        setupMocks();
+        localStorage.clear();
+    });
+
+    it('resets back to exactly 2 default tracks', () => {
+        const { result } = renderMix();
+        act(() => { result.current.handleAddTrack(); });
+        expect(result.current.tracks).toHaveLength(3);
+        act(() => { result.current.handleClearAllTracks(); });
+        expect(result.current.tracks).toHaveLength(2);
+    });
+
+    it('resets track titles to Track 1 and Track 2', () => {
+        const { result } = renderMix();
+        act(() => {
+            result.current.handleAddTrack({ title: 'Custom', audioUrl: 'blob:x', spotifyId: 's1' });
+        });
+        act(() => { result.current.handleClearAllTracks(); });
+        const titles = result.current.tracks.map(t => t.title);
+        expect(titles).toEqual(['Track 1', 'Track 2']);
+    });
+});
+
+// ─── handleOverwriteTracks ────────────────────────────────────────────────────
+
+describe('handleOverwriteTracks', () => {
+    beforeEach(() => {
+        setupMocks();
+        localStorage.clear();
+    });
+
+    it('replaces the track list with the provided array', () => {
+        const { result } = renderMix();
+        const replacement = [
+            { id: 999, title: 'Imported A', audioUrl: null, spotifyId: null },
+            { id: 998, title: 'Imported B', audioUrl: null, spotifyId: null },
+            { id: 997, title: 'Imported C', audioUrl: null, spotifyId: null },
+        ];
+        act(() => { result.current.handleOverwriteTracks(replacement); });
+        expect(result.current.tracks.map(t => t.title)).toEqual(['Imported A', 'Imported B', 'Imported C']);
+    });
+});
+
+// ─── handleAddTrack — insertAfterId ──────────────────────────────────────────
+
+describe('handleAddTrack — insertAfterId', () => {
+    beforeEach(() => {
+        setupMocks();
+        localStorage.clear();
+    });
+
+    it('inserts a track immediately after the specified track id', () => {
+        const { result } = renderMix();
+        const firstId = result.current.tracks[0].id;
+        act(() => {
+            result.current.handleAddTrack({ title: 'Inserted', insertAfterId: firstId });
+        });
+        expect(result.current.tracks[1].title).toBe('Inserted');
+    });
+});
+
+// ─── handleUndo / handleRedo ─────────────────────────────────────────────────
+
+describe('handleUndo and handleRedo', () => {
+    beforeEach(() => {
+        setupMocks();
+        localStorage.clear();
+    });
+
+    it('undo reverts the most recent track deletion', () => {
+        const { result } = renderMix();
+        const trackId = result.current.tracks[0].id;
+        // handleDeleteTrack commits history
+        act(() => { result.current.handleDeleteTrack(trackId); });
+        expect(result.current.tracks).toHaveLength(1);
+        act(() => { result.current.handleUndo(); });
+        expect(result.current.tracks).toHaveLength(2);
+    });
+
+    it('redo reapplies a previously undone deletion', () => {
+        const { result } = renderMix();
+        const trackId = result.current.tracks[0].id;
+        act(() => { result.current.handleDeleteTrack(trackId); });
+        act(() => { result.current.handleUndo(); });
+        act(() => { result.current.handleRedo(); });
+        expect(result.current.tracks).toHaveLength(1);
+    });
+
+    it('undo is a no-op when already at the beginning of history', () => {
+        const { result } = renderMix();
+        // No history-committing changes made — undo should not change anything
+        act(() => { result.current.handleUndo(); });
+        expect(result.current.tracks).toHaveLength(2);
+    });
+
+    it('redo is a no-op when already at the end of history', () => {
+        const { result } = renderMix();
+        const trackId = result.current.tracks[0].id;
+        act(() => { result.current.handleDeleteTrack(trackId); });
+        // No undo done — redo should be a no-op
+        act(() => { result.current.handleRedo(); });
+        expect(result.current.tracks).toHaveLength(1);
+    });
+
+    it('canUndo is false at initial state', () => {
+        const { result } = renderMix();
+        expect(result.current.canUndo).toBe(false);
+    });
+
+    it('canUndo is true after a history-committing track mutation', () => {
+        const { result } = renderMix();
+        const trackId = result.current.tracks[0].id;
+        act(() => { result.current.handleDeleteTrack(trackId); });
+        expect(result.current.canUndo).toBe(true);
+    });
+
+    it('canRedo is true after an undo', () => {
+        const { result } = renderMix();
+        const trackId = result.current.tracks[0].id;
+        act(() => { result.current.handleDeleteTrack(trackId); });
+        act(() => { result.current.handleUndo(); });
+        expect(result.current.canRedo).toBe(true);
+    });
+});
+
+// ─── Firestore snapshot — doc does not exist ─────────────────────────────────
+
+describe('useSpotifyConnect — Firestore snapshot when doc does not exist', () => {
+    beforeEach(() => {
+        setupMocks();
+    });
+
+    it('sets isSpotifyConnected false when Firestore doc does not exist', async () => {
+        const { result } = renderHook(() => useSpotifyConnect());
+
+        await act(async () => { capturedAuthCallback({ uid: 'user_no_doc' }); });
+
+        await act(async () => {
+            capturedSnapshotCallback({ exists: () => false, data: () => ({}) });
+        });
+
+        expect(result.current.isSpotifyConnected).toBe(false);
+    });
+
+    it('sets spotifyProfile null when Firestore doc does not exist', async () => {
+        const { result } = renderHook(() => useSpotifyConnect());
+
+        await act(async () => { capturedAuthCallback({ uid: 'user_no_doc2' }); });
+
+        await act(async () => {
+            capturedSnapshotCallback({ exists: () => false, data: () => ({}) });
+        });
+
+        expect(result.current.spotifyProfile).toBeNull();
+    });
+});
+
 // ─── useSpotifyConnect ────────────────────────────────────────────────────────
 
 describe('useSpotifyConnect', () => {
