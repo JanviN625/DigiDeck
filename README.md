@@ -2,31 +2,27 @@
 
 **License:** AGPL-3.0 | **Stack:** React 19 · Firebase · Vercel · Anthropic claude-haiku-4-5 · WaveSurfer.js · Essentia.js · SoundTouch.js · Spotify API · AudD API
 
+> This README is a trust argument. It documents what the system does, where AI is involved, what evidence supports the trust claims, and where the system is known to fail or fall short.
+
 ---
 
 ## 1. System Overview
 
-DigiDeck is a browser-based music mashup tool that lets authenticated users load tracks from Spotify or upload local MP3s, arrange them in a workspace, apply per-track DSP controls (EQ, reverb, delay, compressor, pitch shift, tempo change, fade in/out, segmentation), and receive conversational AI mixing guidance backed by the current workspace state.
+DigiDeck is a browser-based music mashup tool. Authenticated users load tracks from Spotify or upload local MP3s, arrange them in a workspace, apply per-track controls (EQ, reverb, delay, compressor, pitch shift, tempo, fade, segmentation), and consult an AI mixing assistant.
 
-The system operates entirely in the browser. There is no native app, no DJ hardware requirement, and no audio data stored in the cloud — only URLs and metadata are persisted. Firebase Authentication controls access; Firebase Firestore and Storage back cloud saves and file uploads; all AI calls are routed through a Vercel serverless proxy to keep credentials server-side.
+No audio is stored in the cloud — only URLs and metadata. Firebase handles auth, file storage, and project saves. AI and fingerprinting calls route through a Vercel serverless proxy so no API keys reach the browser. All processing runs client-side.
 
-**Core components:**
+**Trust-relevant architecture:**
 
-| Component | Role |
+| Component | Trust Role |
 |---|---|
-| `App.js` + `AuthScreen.js` | Root routing and auth gate |
-| `firebase.js` (`useFirebaseAuth`) | Firebase Auth state, profile operations |
-| `appContext.js` | All workspace state, UID-scoped localStorage, undo/redo (50 steps), quota error notification |
-| `LibraryPanel.js` | MP3 upload pipeline (ID3 → AudD → Claude fallback), Spotify catalog |
-| `MainWorkspace.js` | Drag-and-drop reorder, track limit enforcement |
-| `TrackCard.js` | Per-track playback, EQ, pitch, speed, effects, segmentation, waveform |
-| `AudioEngine.js` | Web Audio API, SoundTouch pitch/speed, effects chain, offline render |
-| `essentiaAnalyzer.js` | Client-side BPM and key analysis (Essentia WASM, 30 s timeout) |
-| `AIPanel.js` | Claude chat, session management (up to 5), bias disclosure, context timestamp |
-| `Header.js` | Transport, project name, undo/redo, export (WAV), cloud save/load |
-| `ProfileModal.js` | Account info + settings (keybinds, defaults) |
-| `api/aiChat.js` | Vercel serverless proxy — holds `ANTHROPIC_API_KEY` server-side |
-| `FirebaseService.js` | Firebase Storage upload/download, Firestore CRUD, project save/load/delete |
+| `App.js` + `AuthScreen.js` | Auth gate — workspace never renders without a resolved user |
+| `appContext.js` | Workspace state, UID-scoped localStorage, undo/redo (50 steps) |
+| `AudioEngine.js` | Web Audio API, SoundTouch pitch/speed, effects chain, WAV export |
+| `AIPanel.js` | Claude chat with bias disclosure; never modifies workspace |
+| `api/aiChat.js` | Vercel proxy — holds `ANTHROPIC_API_KEY` server-side only |
+| `FirebaseService.js` | Firestore CRUD, Storage upload/download, atomic cleanup on failure |
+| `essentiaAnalyzer.js` | Client-side BPM/key detection (Essentia WASM, 30 s timeout) |
 
 ---
 
@@ -34,191 +30,185 @@ The system operates entirely in the browser. There is no native app, no DJ hardw
 
 ### 2.1 Development Methodology
 
-AI was used at every stage of this project, not as a passive autocomplete tool but as an active development partner. The methodology followed three repeating phases:
+AI was used as an active development partner in three phases:
 
-**Phase 1 — Plan generation.**
-Before implementing any non-trivial feature, a detailed markdown specification was drafted in an external LLM session (Claude or ChatGPT). The plan described what to build, what files to touch, and what the expected behavior and edge cases were. The plan was iterated conversationally until it was sufficiently precise before being used as a prompt.
+1. **Plan first.** Before any significant feature, a spec was written in an external LLM session covering what to build, which files to touch, and what could go wrong. The spec was refined until precise enough to act on.
+2. **Implement with IDE-integrated tools.** Claude Haiku 4.5 (Claude Code) handled logic-heavy work — auth, state, tests, CI/CD, and the AI panel. Gemini 3.1 Low (Antigravity IDE) handled layout; Antigravity can control the browser directly, so it could visually verify UI changes against the design doc.
+3. **Refine conversationally.** Follow-ups corrected mistakes the LLM introduced and resolved design decisions (component choices, Firestore rule scope, storage strategy).
 
-**Phase 2 — IDE-level implementation.**
-Plans were fed into an IDE-integrated LLM alongside relevant source files:
+### 2.2 AI Features in the Product
 
-- **Claude Sonnet 4.6 (VS Code / Claude Code)** was the primary tool for logic-heavy work: auth flows, workspace state, test suites, ESLint fixes, CI/CD validation, trust gate implementation, requirements traceability, and the AI panel backend.
-- **Gemini 3.1 Low (Antigravity IDE)** was used for design and layout tasks. Antigravity can control the browser directly — allowing the model to navigate the live app at `http://127.0.0.1:3000`, visually inspect the rendered output, and verify that layout changes matched the design document before confirming the edit. This was specifically used during the auth redesign and design document reconciliation.
+**Mixing assistant (FR-010–013).** Every user message is sent to `/api/aiChat` with a system prompt containing the live workspace state: track titles, BPM, key, Camelot notation, source type, segment positions, EQ, and active effects. The model is explicitly told not to modify the workspace — suggestions are advisory only. A dismissible bias notice appears above each session warning that suggestions reflect training data and may be inaccurate (FR-027).
 
-**Phase 3 — Conversational refinement.**
-After initial implementation, natural language follow-ups corrected mismatches, fixed bugs the LLM introduced, and narrowed down design decisions (e.g., which HeroUI component variants to use, how to scope Firestore security rules, whether to use Firebase Storage vs. IndexedDB).
+**Filename parsing (FR-022).** If an uploaded MP3 has no ID3 tags and AudD fingerprinting fails, the filename is sent to Claude for a best-effort title/artist guess. Last resort only.
 
-### 2.2 AI Features in the Application
+**Runtime effects description (NFR-010).** `buildEffectsCapabilities()` generates the AI's description of available controls from live config at call time, so the AI cannot give advice based on a stale list of effects.
 
-Three distinct AI capabilities are live in DigiDeck:
+### 2.3 External API Data Flow
 
-**Conversational mixing assistant (FR-010, FR-011, FR-012, FR-013).**
-`AIPanel.js` sends every user message to `/api/aiChat` (Vercel proxy → Anthropic API, `claude-haiku-4-5`). Each request includes a structured system prompt built by `buildSystemPrompt(tracks)` containing the full current workspace state: track titles, BPM, musical key, Camelot notation, energy level, source type, segment parameters, EQ settings, and active effects. The model responds as a DJ assistant. It is explicitly constrained by the system prompt not to issue commands that would automatically modify workspace state; all suggestions are advisory only. If the API call fails, the error is appended as a chat message — no silent failure.
-
-**Filename metadata parsing (FR-022).**
-When a user uploads an MP3 with an unrecognized filename (ID3 tags absent and AudD fingerprinting returns no match), the filename string is sent to Claude for best-effort title and artist extraction. This is a fallback of last resort and applies only when both other methods fail.
-
-**Runtime effects capabilities (NFR-010).**
-`buildEffectsCapabilities()` in `trackConfig.js` derives the AI system prompt's effects description block from `EFFECT_CONFIGS` at call time. This prevents the AI's knowledge of available controls from drifting silently when effect definitions change.
-
-### 2.3 AI Bias Disclosure (FR-027)
-
-A persistent banner above the chat log informs users that "Track suggestions are based on training data and may be inaccurate. BPM, key, and energy values shown are measured directly from your audio — not guessed." This disclosure is non-dismissible and appears before any AI response.
-
-### 2.4 External API Data Flow
-
-All third-party API communication is proxied through Vercel serverless functions. No API key ever reaches the browser.
-
-| Upstream | Route | Data Sent | Stored |
+| Upstream | Route | Data Sent | Stored? |
 |---|---|---|---|
-| Anthropic (Claude) | `/api/aiChat` | User message + workspace context string | Not stored |
-| AudD | `/api/identifyTrack` | Audio URL (not binary) | Not stored |
-| Claude (filename parse) | `/api/parseFilename` | Filename string | Applied to track metadata if both ID3 and AudD fail |
-| Spotify | `api.spotify.com` | Auth token + search query | Playlist/track metadata cached in component state |
+| Anthropic | `/api/aiChat` | Message + workspace context | No |
+| AudD | `/api/identifyTrack` | Audio URL | No |
+| Claude (filename) | `/api/parseFilename` | Filename string | Applied to metadata only if ID3 and AudD both fail |
+| Spotify | `api.spotify.com` | Auth token + search query | Cached in component state |
 
 ---
 
-## 3. CI/CD Pipeline and Trust Gates
+## 3. Trust Gates
 
-### 3.1 Pipeline
-
-Every push or pull request to `main` triggers a four-job GitHub Actions pipeline:
-
-```
-build  →  test  →  analysis  →  deploy (production + preview)
-         ↓             ↓
-     coverage      ESLint
-```
-
-- **build:** `npm ci` + `npm run build` — fails on any compilation error or ESLint warning during bundling.
-- **test:** `npm test -- --coverage --watchAll=false` — 767 tests across 14 suites must pass. Coverage artifacts are uploaded.
-- **analysis:** `npm run lint` — zero ESLint errors permitted; `continue-on-error: false` enforces this.
-- **deploy:** Only runs when all three prior jobs pass. Production deployments are gated on push to `main` only.
-
-The pipeline does not run on changes to `docx/**` or `**.md` files.
-
-Current test count: **767 passing tests, 14/14 suites.**
-
-### 3.2 Trust Gates
+These are the mechanisms that enforce specific trust properties. Each maps to a requirement and is covered by tests.
 
 **G1 — Auth Gate (FR-015)**
-No workspace content is rendered until Firebase Auth resolves with an authenticated user. `App.js` renders `<AuthScreen />` when `user` is null. Workspace localStorage is UID-scoped (`digideck_workspace_${user.uid}`), making one user's data unreachable by another.
-*Evidence:* `auth.test.js`, `authScreen.test.js`, `firebase.test.js` — full auth flow; `libraryPanel.test.js` — Spotify section gated; `header.test.js` — user profile.
+Nothing in the workspace renders until Firebase Auth resolves to a signed-in user. localStorage is UID-scoped so one user's data cannot be read by another. On sign-out, in-memory workspace state resets to defaults.
+*Evidence:* `auth.test.js`, `authScreen.test.js`, `firebase.test.js`, `libraryPanel.test.js`, `header.test.js`
 
 **G2 — Audio Quality Warning (NFR-005)**
-When pitch shift exceeds ±3 semitones or tempo change exceeds ±15%, `TrackCard.js` surfaces a visible degradation warning before the user can proceed.
-*Evidence:* `trackCard.test.js — TrackCard — quality (G6) warning`; `ai.test.js — system prompt — pitch constraint, BPM constraint`.
+If pitch shift exceeds ±3 semitones or tempo exceeds ±15%, a visible warning appears on the track card.
+*Evidence:* `trackCard.test.js — quality warning`; `ai.test.js — system prompt constraints`
 
 **G3 — AI Non-Replacement Guard (FR-012)**
-The Claude system prompt explicitly prohibits issuing actions that add, remove, or reorder tracks without an explicit user gesture. No `tool_use` block is returned; responses are plain text only. The system has no mechanism to apply AI suggestions automatically.
-*Evidence:* `ai.test.js — API call parameters` asserts `tool_choice` is absent and `tools` is an empty array.
+The Claude system prompt explicitly bans adding, removing, or reordering tracks. No tool-use format is requested. The request body omits `tools` and `tool_choice` entirely.
+*Evidence:* `ai.test.js — API call parameters`
 
-**G4 — Track Limit Enforcement (FR-020)**
-`handleAddTrack` in `appContext.js` prevents adding a sixth distinct base song. When the limit is hit, `trackLimitError` is set and `MainWorkspace.js` renders an error notification. The sixth track is never added to state.
-*Evidence:* `appContext.test.js — handleAddTrack — track limit`; `workspace.test.js — MainWorkspace — track limit error notification`.
+**G4 — Track Limit (FR-020)**
+`handleAddTrack` and `handleDuplicateTrack` both check `tracks.length >= 5` and refuse to add a sixth track. An error notification is shown.
+*Evidence:* `appContext.test.js — track limit`; `workspace.test.js — track limit error notification`
 
 **G5 — API Failure Visibility (NFR-007)**
-- Upload and delete failures in `LibraryPanel.js` set `uploadError` / `deleteError` state and render dismissible red banners.
-- Claude API errors in `AIPanel.js` are caught and appended to the chat as an error message — not swallowed.
-- Firebase project save failures in `Header.js` show a "Failed" toast.
-*Evidence:* `libraryPanel.test.js — LibraryPanel — upload error notification, delete error notification`; `ai.test.js — AIPanel — message flow`.
+Upload/delete errors show dismissible banners. Claude errors appear in chat. Project save failures show a toast. localStorage quota failure shows an amber banner for 5 seconds.
+*Evidence:* `libraryPanel.test.js`; `ai.test.js`; `header.test.js`
 
 **G6 — AI Context Freshness (FR-010, FR-029)**
-`buildSystemPrompt(tracks)` is called inside `handleSend()` using the live `tracks` array at the moment the user sends a message. Each AI reply includes a "Context at HH:MM" timestamp so users can judge whether the advice reflects their current mix.
-*Evidence:* `ai.test.js — AIPanel — context timestamp`.
+`buildSystemPrompt()` is called at send time using the live track state. Each reply shows a "Context at HH:MM" timestamp.
+*Evidence:* `ai.test.js — context timestamp`
+
+**G7 — Upload Atomicity**
+If Storage upload succeeds but Firestore write fails, both Storage blobs are deleted before the error surfaces. No orphaned files can persist.
+*Evidence:* `libraryPanel.test.js — upload error notification`
+
+**G8 — Orphan Track Detection on Delete**
+When a file is deleted, all workspace tracks referencing it are marked `isMissing: true` before the Storage delete runs.
+*Evidence:* `libraryPanel.test.js — delete upload`
+
+### CI/CD Pipeline
+
+Every push or pull request to `main` triggers:
+
+```
+build → test → analysis → deploy
+```
+
+- **build:** `npm ci` + `npm run build` — any compile error or ESLint warning fails the job.
+- **test:** `npm test -- --coverage --watchAll=false` — all tests must pass. **Current count: 856 passing, 13/14 suites (1 skipped).**
+- **analysis:** `npm run lint` — zero errors allowed.
+- **deploy:** Only runs if all three prior jobs pass. Production only on push to `main`.
+
+Pipeline skips `docx/**` and `**.md` changes.
 
 ---
 
 ## 4. Key Incidents and Failures
 
-The following are real failures encountered during development. They are documented here because a README without failures is not credible.
+These are real failures that occurred during development. They are documented here because a credible trust argument requires honesty about what went wrong.
 
 **Incident 1 — Forever loading screen after deploy.**
-After deploying to Vercel and adding it as an authorized Firebase domain, login appeared to work but the app hung on a loading screen for authenticated users. Root cause: `firebase.js` called `getDoc()` inside `onAuthStateChanged` with no error handling. Firestore security rules blocked the read and threw an error, which bypassed `setLoading(false)` entirely. Fix: wrapped the Firestore calls in `try/catch/finally` so `setLoading(false)` always executes. The Firestore rules were also tightened to `request.auth.uid == userId` scope.
+`firebase.js` called `getDoc()` inside `onAuthStateChanged` with no error handling. When Firestore rules blocked the read, the error bypassed `setLoading(false)`, leaving the app stuck. Fix: `try/catch/finally` around all Firestore calls so loading always clears.
 
-**Incident 2 — Firebase Storage CORS blocking uploads.**
-After the Firestore fix, uploading MP3s from the Vercel domain failed with a CORS policy error. Firebase Storage requires an explicit CORS configuration per storage bucket — it is not inherited from Firebase Console domain allowlists. Fix: created `cors.json` and applied it with `gsutil cors set` targeting the production bucket.
+**Incident 2 — Firebase Storage CORS blocked uploads.**
+Firebase Storage needs explicit CORS config per bucket — it doesn't inherit domain allowlists from the Firebase Console. Fix: `cors.json` applied with `gsutil cors set`.
 
-**Incident 3 — Spotify tokens blocked by Firestore subcollection rules.**
-After enabling Spotify connect, token storage failed with a permissions error. Root cause: Firestore rules only covered the top-level `users/{userId}` document; subcollections (`users/{userId}/tokens/spotify`) were still denied. Fix: added a wildcard subcollection rule (`{subcollection}/{document=**}`) scoped to authenticated users.
+**Incident 3 — Spotify tokens blocked by subcollection rules.**
+Firestore rules only covered `users/{userId}`. The Spotify token path `users/{userId}/tokens/spotify` was a subcollection and was denied. Fix: wildcard subcollection rule.
 
-**Incident 4 — Essentia KeyExtractor parameter incorrectly identified as a bug.**
-During test development, the value `0.0001` in the `KeyExtractor` call was flagged as a rogue parameter causing tritone misidentification. The fix (removing it) was applied to `analyzer.worker.js`, which immediately broke BPM/key detection in the live app. Root cause: `0.0001` is `spectralPeaksThreshold` — the correct positional default in a 15-argument signature. Both the `public/` and `build/` copies of the worker were reverted. The F major detection from the test fixture was not a code bug but a consequence of insufficient tonal content in the Audacity-generated audio.
+**Incident 4 — AI removed a valid Essentia parameter and broke BPM/key detection.**
+`0.0001` in `KeyExtractor` was flagged as a rogue parameter and removed. It is `spectralPeaksThreshold` — the correct positional default in a 15-argument function. The AI did not check the signature. Both `public/` and `build/` copies of the worker had to be manually reverted.
 
 **Incident 5 — AI responses cut off mid-sentence.**
-During live testing of the AI chat panel, responses were truncated at awkward points. Root cause: `max_tokens` was set to `400` in both `api/aiChat.js` and the fallback path in `AIPanel.js`. Fix: raised to `1024`. This was an oversight from the initial plan draft that used a conservative placeholder.
+`max_tokens` was left at the plan draft placeholder of `400`. Raised to `1024`.
 
-**Incident 6 — AI gave impossible control values.**
-The Claude assistant advised users to "set speed to 0.91" — a value that does not exist in the speed preset dropdown. Root cause: the system prompt described track state but did not convey which controls are fixed presets vs. continuous sliders, nor the valid ranges. Fix: added an `APP_CAPABILITIES` block to the system prompt detailing available controls, valid ranges, and preset values. This was later made fully runtime-derived via `buildEffectsCapabilities()` (NFR-010).
+**Incident 6 — AI suggested control values that don't exist.**
+Claude recommended "set speed to 0.91" — not a valid preset. The system prompt described state but not valid ranges or which controls are presets vs. sliders. Fix: `APP_CAPABILITIES` block added, later made runtime-derived via `buildEffectsCapabilities()`.
 
-**Incident 7 — 172 ESLint errors and 21 test failures in pre-merge CI check.**
-When the full CI workflow was first run locally (`npm run lint` + `npm test -- --coverage --watchAll=false`), the test suite had 21 failures across 5 suites and lint reported 172 errors entirely in test files. Test failures were caused by: `ResizeObserver` not mocked in JSDOM, `Slider` missing from the HeroUI mock, wrong expected keybind values (test had `s + ctrl` but source used `x`), incorrect `handleDuplicateTrack` expectation, and insufficient `fetch` mocks in `spotify.test.js`. Lint errors were exclusively `testing-library` rule violations (`prefer-find-by`, `no-unnecessary-act`, `no-node-access`, `render-result-naming-convention`). All were fixed before merging.
+**Incident 7 — Requirement annotations broke a test suite.**
+`// [NFR-004]` placed inside `describe()` argument lists caused `SyntaxError: Unexpected token` and blocked the whole suite. Fix: moved comments inside the `{`.
 
-**Incident 8 — Syntax error from inline requirement annotation placement.**
-`// [NFR-004]` comments were placed inside the `describe()` argument list instead of after the opening brace in four places in `firebase.test.js`. This caused a `SyntaxError: Unexpected token, expected ","` that prevented the entire suite from running. Fix: moved all four annotations to after the opening `{`.
+**Incident 8 — AI suggested putting a private key in the client bundle.**
+During a refactor, the model suggested moving `api/authTokenValid.js` (which holds the Firebase Admin private key) into `src/firebase/` to "simplify structure." This would have shipped the key to every browser. The model raised no concern. The user caught it.
+
+**Incident 9 — Firebase User properties dropped by shallow clone.**
+`Object.assign({}, auth.currentUser)` was used to force a re-render. Firebase `User` objects expose properties as non-enumerable getters — `Object.assign` silently drops them, producing an empty object. Fix: explicit property mapping.
+
+**Incident 10 — Waveforms disappear after track reorder. (Unresolved)**
+WaveSurfer instances hold references to specific DOM nodes. When React reorders components, the instances become attached to the wrong nodes. Multiple fixes were tried (stable keys, destroy/reinit on cleanup). Waveforms reinitialize after page reload but not reliably after in-session reordering.
+
+**Incident 11 — Beat snapping and segment magnetization abandoned.**
+Both features were planned and attempted across multiple AI sessions. Beat positions from Essentia did not map to WaveSurfer's coordinate system. Magnetization created drag handler conflicts. Both features were removed.
+
+**Incident 12 — `clearAllMocks()` broke auth callback capture.**
+Tests captured the Firebase auth callback with `onAuthStateChanged.mockImplementation(cb => capturedAuthCallback = cb)`. `clearAllMocks()` in `beforeEach` wiped the implementation, so `capturedAuthCallback` was never repopulated. Fix: moved `mockImplementation` inside `beforeEach`.
+
+**Incident 13 — Import paths not updated after moving a file.**
+`SpotifyContext.js` was moved from `src/context/` to `src/spotify/` while the AI was assisting a cleanup. Six files kept the old import path. The AI confirmed the move was complete without doing a dependency scan. Broken imports found at build time.
 
 ---
 
 ## 5. Trust Claims
 
-Each claim below is stated precisely, followed by the evidence that supports it and the known limitations on that evidence.
+Each claim is stated with evidence and its known limitation. Claims without evidence or acknowledged limitations are not included.
 
----
+**Claim 1: No workspace data is visible before a user signs in.**
+*Evidence:* `App.js` shows `<AuthScreen />` when `user` is null. localStorage is keyed per UID. Workspace resets on sign-out. Auth tests cover all transitions. Firestore rules validated by `firestore.rules.test.js`.
+*Limitation:* Rules tests run against the emulator, not production. A misconfiguration that only appears in prod would not be caught before deploy.
 
-**Claim 1: No workspace content or user data is accessible before a user authenticates.**
+**Claim 2: The AI assistant cannot modify workspace tracks.**
+*Evidence:* System prompt prohibits it. `tools` and `tool_choice` are absent from every API request. `ai.test.js — API call parameters` verifies this.
+*Limitation:* The restriction is prompt-based. A model update or a prompt injection in a track title could bypass it. There is no architectural enforcement.
 
-*Evidence:* `App.js` renders `<AuthScreen />` when `user` is null. Workspace localStorage is keyed to `digideck_workspace_${user.uid}`. Test files `auth.test.js` and `authScreen.test.js` verify that the workspace is not rendered before auth resolves, and `firebase.test.js` covers all auth state transitions. Firestore rules are strictly bound, effectively shutting down Incident 3 as validated by `firestore.rules.test.js`.
+**Claim 3: The workspace is capped at five tracks and the user is told when it's full.**
+*Evidence:* `handleAddTrack` and `handleDuplicateTrack` both check `tracks.length >= 5`. Covered by `appContext.test.js` and `workspace.test.js`.
+*Limitation:* None identified.
 
----
+**Claim 4: API and network failures are shown to the user.**
+*Evidence:* Upload/delete errors show banners, Claude errors appear in chat, save failures show a toast, localStorage quota failure shows an amber banner. All tested.
+*Limitation:* Only tested failure paths are covered. Untested paths (e.g. partial Firestore failures mid-load) may still be silent.
 
-**Claim 2: The AI assistant does not modify workspace tracks without an explicit user action.**
-
-*Evidence:* The Claude system prompt contains an explicit prohibition. No `tool_use` response format is requested. `ai.test.js — API call parameters` asserts that `tools` is an empty array and no `tool_choice` key is present in the request body. Post-render, structural command interception blocks the AI from injecting unrecognized JSON-like directives to internal component methods.
-
----
-
-**Claim 3: The workspace cannot exceed five tracks; the user is notified when the limit is reached.**
-
-*Evidence:* `handleAddTrack` and `handleDuplicateTrack` strictly cap tracks using `filter(t => t.audioUrl || t.spotifyId).length >= 5`. Duplicate tracks fundamentally adhere to the workspace capacity checks alongside individual base tracks in `appContext.js`.
-
----
-
-**Claim 4: API and network failures are surfaced to the user; none are silently swallowed.**
-
-*Evidence:* Firebase upload/delete errors render dismissible banners (tested in `libraryPanel.test.js`). Claude API errors are appended to the chat as a visible message (tested in `ai.test.js`). Firebase project save shows a "Failed" toast (`header.test.js`). The `appContext.js` localStorage quota failure shows an amber banner for 5 seconds. `ScriptProcessorNode` audio drops dynamically dispatch `audio-drop` signals caught by `TrackCard.js` UI warnings. `LibraryPanel.js` isolates DB-side `addDoc` uploads inside transactional rollbacks against Storage orphans.
-
----
-
-**Claim 5: The AI receives the workspace state as it exists at message send time.**
-
-*Evidence:* `buildSystemPrompt(getLiveTracks())` retrieves a synchronous buffer reference to the exact moment of the dispatch command (`tracksRef`), natively eliminating the segment modification race condition tied to `Ctrl+S` operations in standard layout event loops. Each reply displays a "Context at HH:MM" timestamp generated from `capturedAt` set at send time.
+**Claim 5: The AI sees the workspace state at the moment the message is sent.**
+*Evidence:* `buildSystemPrompt()` is called at send time with the live track ref. Each response shows a "Context at HH:MM" timestamp. Verified by `ai.test.js`.
+*Limitation:* None identified beyond normal async race conditions, which have not been observed.
 
 ---
 
 ## 6. Limitations and Risks
 
-**What this system cannot be trusted to do:**
+### Known Broken Behavior
 
-- **Export audio accurately for all configurations.** `AudioEngine.renderOffline()` performs an offline render for WAV export, but there is no test verifying the output buffer reflects all per-track settings at export time (gap in coverage — see NFR-009).
-- **Guarantee post-deploy correctness.** There are no automated smoke tests that confirm `/api/aiChat`, Firebase Storage, and the auth endpoint are reachable and returning valid responses after each deployment (NFR-012 — not yet implemented).
-- **Produce verified track identifications.** AudD fingerprinting accuracy is not gated. A failed or incorrect fingerprint result falls back to Claude filename parsing, which is itself a best-effort inference. Neither is validated against ground truth.
-- **Trace which entity made a track change.** `handleUpdateTrack` has no `origin` field. User edits, AudD enrichment, Essentia analysis, and Claude filename parsing are all indistinguishable in state (NFR-011 — not yet implemented).
-- **Provide real-time BPM/key analysis in all environments.** Essentia WASM runs in a Web Worker. JSDOM does not support WebAssembly; these tests mock the analyzer. Browser compatibility with WASM is assumed but not tested across all target browsers.
-- **Produce unbiased AI mixing suggestions.** The bias disclosure (FR-027) is explicit: Claude's suggestions reflect its training data and may favor well-represented artists and genres.
+- **Undo removes the entire track instead of the last action.** The undo system steps through full history snapshots. If the last snapshot before adding a track was empty, undo will remove tracks the user did not intend to remove. Confusing and not per-action.
+- **Segment cut position has a consistent offset.** When snipping a segment, the cut does not land where the cursor appears. The offset is uncorrected. Segments can be adjusted manually, but the first cut is not precise.
+- **Page reload does not restore waveforms or analysis.** Saved tracks reappear but WaveSurfer waveforms and Essentia BPM/key values are not restored. The user must re-trigger analysis manually. Unresolved re-initialization ordering issue.
+- **Waveforms break after in-session track reorder.** See Incident 10. Not fixed.
+- **Beat snapping and segment magnetization do not exist.** They were planned, built, and removed. See Incident 11.
+- **Deceiving track naming leads to mismatch of ID3/AI track finding** If a user names a track to an existing track of another song and artist, uses forein or integer characters, this can mislead results when searching for album art, artist name, etc.
 
-**Architecture-level constraints verified by design, not by tests:**
+### What the System Has Not Been Verified to Do
 
-- FR-006 (browser-only operation): confirmed by the technology choices; no desktop API or hardware interface exists.
-- NFR-006 (responsiveness over fidelity): SoundTouch's `ScriptProcessorNode` is a known trade-off — it may introduce audible artifacts at extreme pitch/tempo values in exchange for real-time responsiveness.
+- Export audio that accurately reflects all per-track settings (no test for offline render output — NFR-009 gap).
+- Confirm that `/api/aiChat`, Firebase Storage, and auth still work after each deployment (no post-deploy smoke tests — NFR-012 not implemented).
+- Identify tracks accurately — AudD can fail or return wrong results; Claude filename parsing is a guess; neither is validated.
+- Distinguish who or what last changed a track — user edits, AudD enrichment, Essentia analysis, and Claude metadata are indistinguishable in state (NFR-011 not implemented).
+- Work correctly on all browsers — Essentia WASM is assumed to run but not tested across targets.
+- Give unbiased mixing suggestions — Claude's output reflects training data.
+
+### Architecture Constraints
+
+- Browser-only by design (FR-006) — no desktop API or hardware dependency.
+- SoundTouch uses `ScriptProcessorNode`, which may produce artifacts at extreme pitch/tempo values (NFR-006).
 
 ---
 
-## 7. Running the Project Locally
+## Appendix A — Running the Project Locally
 
-### Prerequisites
-
-- Node.js 20
-- A `.env` file at project root with the following variables:
+**Prerequisites:** Node.js 20 and a `.env` file:
 
 ```
 REACT_APP_SPOTIFY_CLIENT_ID=
@@ -232,51 +222,48 @@ REACT_APP_FIREBASE_APP_ID=
 ANTHROPIC_API_KEY=
 ```
 
-### Commands
-
 ```bash
-npm install          # Install dependencies
-npm run dev          # Start Vercel dev server (required for /api/* proxy routes)
-npm test             # Run test suite
-npm run build        # Production build
-npm run lint         # ESLint (zero warnings enforced)
-npm run emulators    # Start Firebase emulators (Firestore)
+npm install          # install dependencies
+npm run dev          # Vercel dev server (required for /api/* routes)
+npm test             # run tests
+npm run build        # production build
+npm run lint         # ESLint
+npm run emulators    # Firebase emulators (Firestore)
 ```
 
-> **Note:** `npm start` (react-scripts) does not proxy `/api/` requests. Use `npm run dev` (Vercel CLI) for local development with AI and fingerprinting features working.
+> Use `npm run dev`, not `npm start`. `react-scripts` does not proxy `/api/` requests.
 
 ---
 
-## 8. Repository Structure (Abbreviated)
+## Appendix B — Repository Structure
 
 ```
 src/
-  components/       — AIPanel, AuthScreen, Header, LibraryPanel, MainWorkspace,
-                      PlaylistModal, ProfileModal, TrackCard
-  firebase/         — firebase.js (useFirebaseAuth), FirebaseService.js
-  spotify/          — appContext.js, SpotifyService.js, spotifyAuth.js
-  audio/            — AudioEngine.js, useAudioEngine.js
-  utils/            — helpers.js, trackConfig.js, useSettings.js
-  tests/            — 14 test suites (767 tests)
-api/                — Vercel serverless functions (aiChat.js, identifyTrack.js, parseFilename.js)
-public/essentia/    — analyzer.worker.js (Essentia WASM worker)
-docx/               — Requirements V1.md, Traceability V1.md, Design V1.1.1.md
-.github/workflows/  — ci.yml (build → test → analysis → deploy)
+  components/   — AIPanel, AuthScreen, Header, LibraryPanel, MainWorkspace,
+                  PlaylistModal, ProfileModal, TrackCard
+  firebase/     — firebase.js, FirebaseService.js
+  spotify/      — appContext.js, SpotifyService.js, spotifyAuth.js
+  audio/        — AudioEngine.js, useAudioEngine.js
+  utils/        — helpers.js, trackConfig.js, useSettings.js
+  tests/        — 14 test suites
+api/            — aiChat.js, identifyTrack.js, parseFilename.js
+public/essentia/ — analyzer.worker.js (Essentia WASM worker)
+docx/           — Requirements V1.md, Traceability V1.md, Design V1.1.1.md
+.github/workflows/ — ci.yml
 ```
 
 ---
 
-## 9. Requirements and Traceability
+## Appendix C — Requirements and Traceability
 
-Full requirement definitions are in `docx/Requirements V1.md` (FR-001–FR-029, NFR-001–NFR-012).
+Full requirements: `docx/Requirements V1.md` (FR-001–FR-029, NFR-001–NFR-012).
 
-Full test-to-requirement mapping is in `docx/markdown-versions/Traceability V1.md`.
+Full test-to-requirement mapping: `docx/markdown-versions/Traceability V1.md`.
 
-**Summary of coverage gaps:**
-
-| Requirement | Reason |
+| Requirement | Status |
 |---|---|
 | FR-006 (browser-only) | Architecture constraint — verified by design |
 | NFR-006 (responsiveness over fidelity) | Subjective quality attribute — not unit-testable |
-| NFR-011 (action-origin audit trail) | Feature not yet implemented |
-| NFR-012 (post-deploy smoke tests) | Infrastructure not yet implemented |
+| NFR-009 (export accuracy) | Coverage gap — no offline render output test |
+| NFR-011 (action-origin audit trail) | Not implemented |
+| NFR-012 (post-deploy smoke tests) | Not implemented |
