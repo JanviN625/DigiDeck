@@ -301,6 +301,7 @@ const ACTIONS = [
   { key: 'copySegment',     label: 'Copy segment' },
   { key: 'pasteSegment',    label: 'Paste segment' },
   { key: 'deleteSegment',   label: 'Delete segment' },
+  { key: 'magnetToggle',    label: 'Toggle magnet (segment positioning)' },
   { key: 'loadProject',     label: 'Load project' },
   { key: 'exportProject',   label: 'Export project' },
 ];

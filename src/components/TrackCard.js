@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, EyeOff, Move, Copy, Trash2, RotateCcw, AlertTriangle, X, Plus, Power } from 'lucide-react';
+import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, EyeOff, Move, Copy, Trash2, RotateCcw, AlertTriangle, X, Plus, Power, Magnet } from 'lucide-react';
 import { Slider } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
 import { EFFECT_CONFIGS } from '../utils/trackConfig';
@@ -8,7 +8,7 @@ import AudioEngineService, { audioBufferToWAV } from '../audio/AudioEngine';
 import WaveSurfer from 'wavesurfer.js';
 import { analyzeAudioBuffer } from '../audio/essentiaAnalyzer';
 import { useMix } from '../spotify/appContext';
-import { useSettings, matchesKeybind } from '../utils/useSettings';
+import { useSettings, matchesKeybind, formatKeybind } from '../utils/useSettings';
 
 const SPEED_MIN = 0.25;
 const SPEED_MAX = 2.0;
@@ -99,6 +99,7 @@ const makeDefaultSegment = (id, startPct = 0, endPct = 1) => ({
     eqLow: 0, eqMid: 0, eqHigh: 0,
     eqKills: { low: false, mid: false, high: false },
     effects: [],
+    masterTimePct: null,
 });
 
 // Key names for pitch transposition (chromatic)
@@ -133,7 +134,7 @@ export default function TrackCard({
     isMissing = false,
 }) {
     const { settings } = useSettings();
-    const { tracks, handleUpdateTrack, handleAddTrack, universalIsPlaying, masterStopSignal, globalZoom, masterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleOverwriteTracks } = useMix();
+    const { tracks, handleUpdateTrack, handleUpdateTrackDuration, handleAddTrack, universalIsPlaying, masterStopSignal, globalZoom, masterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleOverwriteTracks } = useMix();
     const {
         play, pause, seek, setVolume: setEngVolume, setPitch: setEngPitch, setSpeed: setEngSpeed,
         setEQ, addEffect, removeEffect, setEffectParam, applyFadeIn, applyFadeOut
@@ -153,15 +154,25 @@ export default function TrackCard({
     const [pitch, setPitch] = useState(initialPitch);
     const [speed, setSpeed] = useState(initialSpeed);
     const [speedInputVal, setSpeedInputVal] = useState(null); // null = display mode, string = editing
+    const [useTargetBpmMode, setUseTargetBpmMode] = useState(false); // false = speed slider, true = BPM input
     const [fadeIn, setFadeIn] = useState(() => parseFade(initialFadeIn));
     const [fadeOut, setFadeOut] = useState(() => parseFade(initialFadeOut));
     const [audioDuration, setAudioDuration] = useState(0);
     const [displayTimeSec, setDisplayTimeSec] = useState(0);
     const [containerWidth, setContainerWidth] = useState(0);
+    // Per-track zoom — must be declared before waveformPixelWidth (used below).
+    // Syncs with globalZoom when the global slider moves; per-track +/- adjusts independently from there.
+    const [localZoom, setLocalZoom] = useState(globalZoom);
+    useEffect(() => { setLocalZoom(globalZoom); }, [globalZoom]);
+    // Per-track magnet toggle. ON = segments packed from start; OFF = segments beat-positioned freely.
+    const [isMagnetOn, setIsMagnetOn] = useState(true);
+    const isMagnetOnRef = useRef(true);
+    // Wall-clock duration at current speed. Slower speed → waveform stretches wider so beat markers align.
+    const effectiveDuration = audioDuration > 0 ? audioDuration / Math.max(0.1, parseFloat(speed)) : 0;
     // Derived synchronously — no state lag when zoom changes.
-    // zoom > 0: WaveSurfer pxPerSec = zoom * 2, so total canvas width = zoom * 2 * duration.
+    // zoom > 0: WaveSurfer pxPerSec = zoom * 2 / speed, so total canvas width = zoom * 2 * effectiveDuration.
     // zoom = 0: WaveSurfer auto-fits to container; containerWidth is measured via rAF.
-    const waveformPixelWidth = globalZoom > 0 && audioDuration ? globalZoom * 2 * audioDuration : containerWidth;
+    const waveformPixelWidth = localZoom > 0 && effectiveDuration > 0 ? localZoom * 2 * effectiveDuration : containerWidth;
     const [effects, setEffects] = useState([]);
     const [showAddEffectMenu, setShowAddEffectMenu] = useState(false);
     const [isDraggable, setIsDraggable] = useState(false);
@@ -246,6 +257,54 @@ export default function TrackCard({
     useEffect(() => {
         adjustedBeatPositionsRef.current = adjustedBeatPositions;
     }, [adjustedBeatPositions]);
+
+    // Effective BPM = original BPM × current speed. bpm prop is never mutated, so this is always accurate.
+    const effectiveBpm = useMemo(() => {
+        const parsed = parseFloat(bpm);
+        if (!bpm || bpm === '[BPM]' || isNaN(parsed)) return null;
+        return Math.round(parsed * parseFloat(speed));
+    }, [bpm, speed]);
+
+    // Master BPM beat grid — evenly spaced at 60/masterBpm intervals, phase-locked to the master
+    // timeline clock by accounting for this track's offsetSec. All tracks share the same phase.
+    const masterBeatGrid = useMemo(() => {
+        if (!masterBpm || masterBpm <= 0 || !audioDuration) return [];
+        const beatSec = 60 / masterBpm;
+        const offset = offsetSec || 0;
+        const firstBeatIdx = Math.ceil(offset / beatSec);
+        const grid = [];
+        for (let i = firstBeatIdx; ; i++) {
+            const beatInTrack = i * beatSec - offset;
+            if (beatInTrack >= audioDuration) break;
+            if (beatInTrack >= 0) grid.push(beatInTrack);
+        }
+        return grid.length > 500 ? [] : grid; // safety cap: avoid rendering 500+ lines
+    }, [masterBpm, audioDuration, offsetSec]);
+
+    const masterBeatGridRef = useRef([]);
+    useEffect(() => { masterBeatGridRef.current = masterBeatGrid; }, [masterBeatGrid]);
+
+    // Warn user when track's effective BPM differs from master (Sync All would override it)
+    const isOutOfSyncWithMaster = useMemo(() => {
+        if (!effectiveBpm || !masterBpm) return false;
+        return Math.abs(effectiveBpm - masterBpm) > 0.5;
+    }, [effectiveBpm, masterBpm]);
+
+    // Longest track: the one whose effectiveDuration + offsetSec equals masterDuration.
+    // It cannot use free positioning — magnet is always ON for it.
+    const isLongestTrack = useMemo(() => {
+        if (!masterDuration || masterDuration <= 0 || !effectiveDuration) return false;
+        return Math.abs((offsetSec || 0) + effectiveDuration - masterDuration) < 0.1;
+    }, [masterDuration, effectiveDuration, offsetSec]);
+
+    useEffect(() => { if (isLongestTrack) setIsMagnetOn(true); }, [isLongestTrack]);
+    useEffect(() => { isMagnetOnRef.current = isMagnetOn; }, [isMagnetOn]);
+
+
+    // Sync local speed state when the prop changes externally (e.g. Sync All from header).
+    useEffect(() => {
+        setSpeed(initialSpeed);
+    }, [initialSpeed]);
 
     // Keep refs current for use inside rAF loop and WaveSurfer callbacks that close over stale state.
     useEffect(() => { segmentsRef.current = segments; }, [segments]);
@@ -340,9 +399,11 @@ export default function TrackCard({
                 // never on programmatic ws.seekTo() calls from the playhead sync loop.
                 ws.on('ready', () => {
                     waveformReadyRef.current = true;
-                    durationRef.current = ws.getDuration();
-                    setAudioDuration(ws.getDuration());
-                    if (globalZoom > 0) ws.zoom(globalZoom * 2);
+                    const dur = ws.getDuration();
+                    durationRef.current = dur;
+                    setAudioDuration(dur);
+                    handleUpdateTrackDuration(trackId, dur);
+                    if (localZoom > 0) ws.zoom(localZoom * 2 / Math.max(0.1, parseFloat(speed)));
                 });
 
                 ws.on('interaction', (newTime) => {
@@ -470,13 +531,13 @@ export default function TrackCard({
     // overlay container so all overlays remain pinned to their correct time positions.
     useEffect(() => {
         if (!waveformReadyRef.current || !wavesurferRef.current) return;
-        wavesurferRef.current.zoom(globalZoom * 2);
+        wavesurferRef.current.zoom(localZoom > 0 ? localZoom * 2 / Math.max(0.1, parseFloat(speed)) : 0);
         requestAnimationFrame(() => {
             if (!scrollContainerRef.current) return;
-            if (globalZoom > 0 && waveformRef.current) {
+            if (localZoom > 0 && waveformRef.current) {
                 // Center the view on the current playhead position.
                 // totalWidth = pxPerSec * duration (same formula as waveformPixelWidth).
-                const totalWidth  = globalZoom * 2 * durationRef.current;
+                const totalWidth  = localZoom * 2 * durationRef.current;
                 const containerW  = scrollContainerRef.current.clientWidth;
                 const playheadPx  = currentTimePctRef.current * totalWidth;
                 const scrollTo    = Math.max(0, Math.min(playheadPx - containerW / 2, totalWidth - containerW));
@@ -486,7 +547,39 @@ export default function TrackCard({
                 scrollContainerRef.current.scrollLeft = 0;
             }
         });
-    }, [globalZoom]);
+    }, [localZoom, speed]);
+
+    // When masterDuration changes (another track loads/unloads), the clip gets a new proportional width.
+    // WaveSurfer must re-zoom to 0 so it auto-fits the waveform to the new (narrower or wider) clip.
+    useEffect(() => {
+        if (!wavesurferRef.current || !waveformReadyRef.current || localZoom !== 0) return;
+        wavesurferRef.current.zoom(0);
+    }, [masterDuration, effectiveDuration, localZoom]);
+
+    // Scroll-wheel zoom — must be non-passive so preventDefault() actually stops page scroll.
+    // RAF-debounced so rapid scroll events are coalesced into one zoom call per frame.
+    useEffect(() => {
+        const el = scrollContainerRef.current;
+        if (!el) return;
+        let rafId = null;
+        let pending = 0;
+        const onWheel = (e) => {
+            e.preventDefault();
+            pending += e.deltaY < 0 ? 5 : -5;
+            if (rafId) return;
+            rafId = requestAnimationFrame(() => {
+                rafId = null;
+                const delta = pending;
+                pending = 0;
+                setLocalZoom(z => Math.min(100, Math.max(0, z + delta)));
+            });
+        };
+        el.addEventListener('wheel', onWheel, { passive: false });
+        return () => {
+            el.removeEventListener('wheel', onWheel);
+            if (rafId) cancelAnimationFrame(rafId);
+        };
+    }, [audioUrl, isExpanded]); // re-attach when audio loads or card expands
 
     // Measure container width dynamically using ResizeObserver.
     // This handles zoom = 0 (auto-fit mode) and any flex shrinking if masterDuration extends.
@@ -539,17 +632,13 @@ export default function TrackCard({
     const setSpeedWithSync = useCallback((v) => {
         setSpeed(v);
         syncActiveSegmentSettings({ speed: v });
-        // Update displayed BPM proportionally to speed
-        if (bpm && bpm !== '[BPM]' && !isNaN(parseFloat(bpm))) {
-            const newBpm = Math.round(parseFloat(bpm) * v);
-            handleUpdateTrack(trackId, { bpm: String(newBpm) }, true);
-        }
-    }, [syncActiveSegmentSettings, bpm, trackId, handleUpdateTrack]);
+    }, [syncActiveSegmentSettings]);
     const setEqLowWithSync     = useCallback((v) => { setEqLow(v);   syncActiveSegmentSettings({ eqLow: v }); },   [syncActiveSegmentSettings]);
     const setEqMidWithSync     = useCallback((v) => { setEqMid(v);   syncActiveSegmentSettings({ eqMid: v }); },   [syncActiveSegmentSettings]);
     const setEqHighWithSync    = useCallback((v) => { setEqHigh(v);  syncActiveSegmentSettings({ eqHigh: v }); },  [syncActiveSegmentSettings]);
     const setEqKillsWithSync   = useCallback((v) => { setEqKills(v); syncActiveSegmentSettings({ eqKills: v }); }, [syncActiveSegmentSettings]);
 
+    // eslint-disable-next-line no-unused-vars
     const handleToggleDelete = useCallback((e) => {
         e.stopPropagation();
         const seg = segmentsRef.current?.find(s => s.id === activeSegmentIdRef.current);
@@ -559,6 +648,7 @@ export default function TrackCard({
         setIsSegmentMuted(next || seg.isMuted);
     }, [syncActiveSegmentSettings]);
 
+    // eslint-disable-next-line no-unused-vars
     const handleToggleMute = useCallback((e) => {
         e.stopPropagation();
         const seg = segmentsRef.current?.find(s => s.id === activeSegmentIdRef.current);
@@ -661,11 +751,10 @@ export default function TrackCard({
                 const targetSpeed = masterBpm / parsedBpm;
                 const clampedSpeed = Math.min(4.0, Math.max(0.25, targetSpeed));
                 setSpeedWithSync(clampedSpeed);
-                // After sync, display the master BPM since the track is now matching it
-                handleUpdateTrack(trackId, { bpm: String(masterBpm) });
+                // bpm prop is preserved as the original analyzed value — not overwritten
             }
         }
-    }, [bpm, masterBpm, setSpeedWithSync, handleUpdateTrack, trackId]);
+    }, [bpm, masterBpm, setSpeedWithSync]);
 
     // Split track at playhead position — inserts a cut point into the segments array.
     // Cut snaps to the nearest beat/half-beat when Essentia data is available.
@@ -676,19 +765,20 @@ export default function TrackCard({
 
         let timeSec = wavesurferRef.current.getCurrentTime();
 
-        // Snap to nearest beat or half-beat (speed-adjusted so cuts land on heard beats)
-        const beats = adjustedBeatPositionsRef.current;
-        if (beats && beats.length > 1) {
-            const grid = [];
-            for (let i = 0; i < beats.length; i++) {
-                grid.push(beats[i]);
-                if (i < beats.length - 1) grid.push((beats[i] + beats[i + 1]) / 2);
-            }
-            let nearest = grid[0];
-            let minDist = Math.abs(grid[0] - timeSec);
-            for (let i = 1; i < grid.length; i++) {
-                const d = Math.abs(grid[i] - timeSec);
-                if (d < minDist) { minDist = d; nearest = grid[i]; }
+        // Snap to nearest of: master BPM beats + analyzed beats + half-beats between analyzed beats
+        const masterBeats = masterBeatGridRef.current ?? [];
+        const trackBeats  = adjustedBeatPositionsRef.current ?? [];
+        const gridSet = new Set([...masterBeats]);
+        for (let i = 0; i < trackBeats.length; i++) {
+            gridSet.add(trackBeats[i]);
+            if (i < trackBeats.length - 1) gridSet.add((trackBeats[i] + trackBeats[i + 1]) / 2);
+        }
+        const grid = [...gridSet].sort((a, b) => a - b);
+        if (grid.length > 0) {
+            let nearest = grid[0], minDist = Math.abs(grid[0] - timeSec);
+            for (const g of grid) {
+                const d = Math.abs(g - timeSec);
+                if (d < minDist) { minDist = d; nearest = g; }
             }
             timeSec = nearest;
         }
@@ -701,16 +791,21 @@ export default function TrackCard({
             const idx = prev.findIndex(seg => pct >= seg.startPct && pct < seg.endPct);
             if (idx === -1) return prev;
             const seg = prev[idx];
+            // Propagate masterTimePct: right half inherits its position within master timeline
+            const rightMasterTimePct = seg.masterTimePct !== null && masterDuration > 0
+                ? seg.masterTimePct + (pct - seg.startPct) * audioDuration / masterDuration
+                : null;
             const next = [...prev];
             next.splice(idx, 1,
                 { ...seg, startPct: seg.startPct, endPct: pct, fadeOut: 0 },
-                { ...seg, id: Date.now(), startPct: pct, endPct: seg.endPct, fadeIn: 0 }
+                { ...seg, id: Date.now(), startPct: pct, endPct: seg.endPct, fadeIn: 0, masterTimePct: rightMasterTimePct }
             );
             handleUpdateTrack(trackId, { initialSegments: next });
             return next;
         });
-    }, [audioUrl, handleUpdateTrack, trackId]);
+    }, [audioUrl, handleUpdateTrack, trackId, masterDuration, audioDuration]);
 
+    // eslint-disable-next-line no-unused-vars
     const handleOffsetDragStart = useCallback((e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -767,9 +862,12 @@ export default function TrackCard({
         e.preventDefault();
 
         const liveSegs = segmentsRef.current; // snapshot at drag start (sorted by startPct)
+        const startX = e.clientX;
+
+        // ── REORDER MODE: drag to reorder segments + remap audio buffer ────────
+        // Magnet ON = snap to nearest beat during drag. Magnet OFF = free reorder without snap.
         if (liveSegs.length < 2) return; // nothing to reorder with a single segment
 
-        const startX = e.clientX;
         const laneWidth = laneRef.current?.clientWidth || 800;
         const draggedIdx = liveSegs.findIndex(s => s.id === seg.id);
         if (draggedIdx === -1) return;
@@ -780,7 +878,27 @@ export default function TrackCard({
         setDragPreviewOrder(currentPreviewIds);
 
         const handleMouseMove = (moveEvent) => {
-            const dx = moveEvent.clientX - startX;
+            let dx = moveEvent.clientX - startX;
+
+            // Snap left edge of dragged segment to nearest master beat grid line (12px radius).
+            // Only snaps when magnet is ON — magnet OFF allows free reorder without snapping.
+            if (isMagnetOnRef.current) {
+                const beats = masterBeatGridRef.current;
+                if (beats.length > 0 && audioDuration > 0 && laneWidth > 0) {
+                    const newStartPct = seg.startPct + dx / laneWidth;
+                    const newStartSec = newStartPct * audioDuration;
+                    let nearestBeat = beats[0], minDist = Math.abs(newStartSec - beats[0]);
+                    for (const b of beats) {
+                        const d = Math.abs(newStartSec - b);
+                        if (d < minDist) { minDist = d; nearestBeat = b; }
+                    }
+                    const snapThresholdSec = (12 / laneWidth) * audioDuration;
+                    if (minDist < snapThresholdSec) {
+                        dx = (nearestBeat / audioDuration - seg.startPct) * laneWidth;
+                    }
+                }
+            }
+
             setDraggedSegmentState({ id: seg.id, dx });
 
             // Determine where the dragged segment's center would land as a pct of the lane
@@ -866,6 +984,7 @@ export default function TrackCard({
             // WaveSurfer.load(url, peaks, duration) draws peaks without decoding when peaks are provided.
             const peaks = computeWaveformPeaks(newBuf);
             if (wavesurferRef.current && waveBlobUrlRef.current) {
+                waveformReadyRef.current = false;
                 wavesurferRef.current.load(waveBlobUrlRef.current, peaks, newBuf.duration);
             }
 
@@ -890,7 +1009,7 @@ export default function TrackCard({
 
         document.addEventListener('mousemove', handleMouseMove);
         document.addEventListener('mouseup', handleMouseUp);
-    }, [trackId, handleUpdateTrack]);
+    }, [trackId, handleUpdateTrack, audioDuration]);
 
     // Disambiguates click vs drag on a segment overlay.
     // A movement of >5px in any direction starts a drag; release without moving seeks + activates.
@@ -952,7 +1071,12 @@ export default function TrackCard({
                 e.preventDefault();
                 handleSplit();
             }
-            
+
+            if (matchesKeybind(e, settings.keybinds.magnetToggle)) {
+                e.preventDefault();
+                if (!isLongestTrack) setIsMagnetOn(v => !v);
+            }
+
             // Copy segment
             if (matchesKeybind(e, settings.keybinds.copySegment)) {
                 const activeSeg = segments.find(s => s.id === activeSegmentIdRef.current);
@@ -1061,6 +1185,7 @@ export default function TrackCard({
                 // Render waveform immediately from peaks
                 const pastePeaks = computeWaveformPeaks(newBuf);
                 if (wavesurferRef.current && waveBlobUrlRef.current) {
+                    waveformReadyRef.current = false;
                     wavesurferRef.current.load(waveBlobUrlRef.current, pastePeaks, newDuration);
                 }
 
@@ -1141,6 +1266,7 @@ export default function TrackCard({
                 // Render waveform immediately from peaks — segment vanishes from display at once
                 const delPeaks = computeWaveformPeaks(newBuf);
                 if (wavesurferRef.current && waveBlobUrlRef.current) {
+                    waveformReadyRef.current = false;
                     wavesurferRef.current.load(waveBlobUrlRef.current, delPeaks, newBuf.duration);
                 }
 
@@ -1164,7 +1290,7 @@ export default function TrackCard({
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [isExpanded, audioUrl, handleSplit, settings.keybinds.splitAtPlayhead, settings.keybinds.copySegment, settings.keybinds.pasteSegment, settings.keybinds.deleteSegment, segments, trackId, bpm, trackKey, handleAddTrack, trackName, settings, masterTimeRef, beatPositions, handleUpdateTrack, offsetSec]);
+    }, [isExpanded, audioUrl, handleSplit, settings.keybinds.splitAtPlayhead, settings.keybinds.copySegment, settings.keybinds.pasteSegment, settings.keybinds.deleteSegment, segments, trackId, bpm, trackKey, handleAddTrack, trackName, settings, masterTimeRef, beatPositions, handleUpdateTrack, offsetSec, isLongestTrack]);
 
     // Play Pause Sync
     useEffect(() => {
@@ -1321,7 +1447,8 @@ export default function TrackCard({
         };
         if (isPlaying) updatePlayhead();
         return () => cancelAnimationFrame(frameId);
-    }, [isPlaying, trackId, applyFadeIn, applyFadeOut, waveformPixelWidth]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isPlaying, trackId, applyFadeIn, applyFadeOut, waveformPixelWidth, offsetSec]);
 
     return (
         <div className="relative">
@@ -1400,6 +1527,19 @@ export default function TrackCard({
                                     : <span className="text-base-200 whitespace-nowrap">{trackKey}</span>
                                 }
                             </span>
+                            {isOutOfSyncWithMaster && (
+                                <>
+                                    <div className="w-1 h-1 shrink-0 rounded-full bg-base-600 hidden xs:block"></div>
+                                    <div
+                                        className="flex items-center gap-1 text-[11px] text-amber-400/80"
+                                        title={`Track is at ≈${effectiveBpm} BPM — Sync or Sync All will set speed to match Master BPM (${masterBpm})`}
+                                        onClick={(e) => e.stopPropagation()}
+                                    >
+                                        <AlertTriangle size={11} className="shrink-0" />
+                                        <span className="whitespace-nowrap">Not synced to master ({effectiveBpm} BPM)</span>
+                                    </div>
+                                </>
+                            )}
                         </div>
                         )}
                     </div>
@@ -1430,6 +1570,29 @@ export default function TrackCard({
                                 title="Duplicate track"
                             >
                                 <Copy size={14} />
+                            </button>
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (!isLongestTrack) setIsMagnetOn(v => !v);
+                                }}
+                                disabled={isLongestTrack}
+                                className={`p-1.5 rounded transition-colors active:scale-95 ${
+                                    isLongestTrack
+                                        ? 'text-base-700 cursor-not-allowed'
+                                        : isMagnetOn
+                                            ? 'text-orange-400 bg-orange-500/10 hover:bg-orange-500/20'
+                                            : 'text-base-400 hover:text-base-50 hover:bg-base-700'
+                                }`}
+                                title={
+                                    isLongestTrack
+                                        ? 'Longest track — layout locked (segment reorder only)'
+                                        : isMagnetOn
+                                            ? `Magnet ON — segments packed from start [${formatKeybind(settings.keybinds.magnetToggle)}]`
+                                            : `Magnet OFF — segments beat-positioned [${formatKeybind(settings.keybinds.magnetToggle)}]`
+                                }
+                            >
+                                <Magnet size={14} />
                             </button>
                             <div className="w-px h-4 bg-base-700 mx-0.5"></div>
                             <button
@@ -1532,6 +1695,8 @@ export default function TrackCard({
                             />
                         </div>
 
+
+
                         {/* Sync + Extract */}
                         <div className="flex gap-1.5 w-full mt-1 overflow-hidden" onClick={(e) => e.stopPropagation()}>
                             <button
@@ -1609,13 +1774,15 @@ export default function TrackCard({
                         <div 
                             className="absolute top-0 bottom-0 flex flex-col bg-base-900 border border-base-700 shadow-xl rounded overflow-hidden"
                             style={{
-                                width: masterDuration > 0 && audioDuration > 0 ? `${(audioDuration / masterDuration) * 100}%` : '100%',
+                                width: masterDuration > 0 && effectiveDuration > 0
+                                    ? `${(effectiveDuration / masterDuration) * 100}%`
+                                    : '100%',
                                 left: masterDuration > 0 ? `${(offsetSec / masterDuration) * 100}%` : '0%',
                                 transition: isDragged ? 'none' : 'left 0.1s ease-out'
                             }}
                         >
                             {/* Consolidated Scroll Viewport for Syncing WaveSurfer and Bars Natively */}
-                            <div 
+                            <div
                                 ref={scrollContainerRef}
                                 className="relative flex-1 min-w-full overflow-x-auto overflow-y-hidden scrollbar-hide bg-base-900"
                             >
@@ -1633,7 +1800,7 @@ export default function TrackCard({
                                             const overlays = [];
                                             if (seg.fadeIn > 0) {
                                                 const fw = Math.min(seg.fadeIn / audioDuration, seg.endPct - seg.startPct);
-                                                const style = globalZoom === 0
+                                                const style = localZoom === 0
                                                     ? { left: `${seg.startPct * 100}%`, width: `${fw * 100}%`, height: '100%' }
                                                     : { left: seg.startPct * waveformPixelWidth, width: fw * waveformPixelWidth, height: '100%' };
                                                 overlays.push(
@@ -1644,7 +1811,7 @@ export default function TrackCard({
                                             }
                                             if (seg.fadeOut > 0) {
                                                 const fw = Math.min(seg.fadeOut / audioDuration, seg.endPct - seg.startPct);
-                                                const style = globalZoom === 0
+                                                const style = localZoom === 0
                                                     ? { left: `${(seg.endPct - fw) * 100}%`, width: `${fw * 100}%`, height: '100%' }
                                                     : { left: (seg.endPct - fw) * waveformPixelWidth, width: fw * waveformPixelWidth, height: '100%' };
                                                 overlays.push(
@@ -1656,8 +1823,21 @@ export default function TrackCard({
                                             return overlays;
                                         })}
 
-                                        {/* Beat markers */}
-                                        {globalZoom >= 25 && audioDuration > 0 && adjustedBeatPositions.length > 0 && waveformPixelWidth > 0 && (
+                                        {/* Master BPM beat grid — faint phase-locked lines, visible at localZoom >= 65 */}
+                                        {localZoom >= 65 && audioDuration > 0 && masterBeatGrid.length > 0 && waveformPixelWidth > 0 && (
+                                            <div className="absolute inset-y-0 left-0 pointer-events-none z-[13]" style={{ width: waveformPixelWidth }}>
+                                                {masterBeatGrid.map((t, i) => (
+                                                    <div
+                                                        key={`mbg-${i}`}
+                                                        className="absolute top-0 bottom-0 w-px bg-base-600/30"
+                                                        style={{ left: `${(t / audioDuration) * 100}%` }}
+                                                    />
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {/* Per-track analyzed beat markers — slightly brighter, visible at localZoom >= 65 */}
+                                        {localZoom >= 65 && audioDuration > 0 && adjustedBeatPositions.length > 0 && waveformPixelWidth > 0 && (
                                             <div className="absolute inset-y-0 left-0 pointer-events-none z-[15]" style={{ width: waveformPixelWidth }}>
                                                 {adjustedBeatPositions.map((t, i) => (
                                                     <div
@@ -1694,10 +1874,10 @@ export default function TrackCard({
                                                 }
                                             }
 
-                                            const left = globalZoom > 0 && waveformPixelWidth > 0
+                                            const left = localZoom > 0 && waveformPixelWidth > 0
                                                 ? seg.startPct * waveformPixelWidth
                                                 : `${seg.startPct * 100}%`;
-                                            const width = globalZoom > 0 && waveformPixelWidth > 0
+                                            const width = localZoom > 0 && waveformPixelWidth > 0
                                                 ? (seg.endPct - seg.startPct) * waveformPixelWidth
                                                 : `${(seg.endPct - seg.startPct) * 100}%`;
 
@@ -1745,21 +1925,15 @@ export default function TrackCard({
                             </div>
                         </div>
 
-                        {/* Timeline Lane base layer */}
-                        <div className="absolute inset-0 flex items-end px-2 pb-1 pointer-events-none z-[1]">
-                            <span className="text-[10px] font-mono text-base-600/50 mix-blend-plus-lighter tabular-nums shrink-0 select-none bg-base-900/50 backdrop-blur-sm px-1.5 rounded">
-                                {formatTimestamp(displayTimeSec)} / {formatTimestamp((audioDuration || 0) + (offsetSec || 0))}
-                            </span>
-                        </div>
                     </div>
                 </div>}
 
-                {/* Collapsible Settings */}
+                {/* Below-waveform bar: Settings toggle + timestamp + per-track zoom — same horizontal axis */}
                 {isExpanded && (
-                    <div className="flex flex-col w-full mt-3" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center w-full mt-2 gap-2" onClick={(e) => e.stopPropagation()}>
                         <button
                             disabled={!isVisible}
-                            className={`flex items-center gap-2 text-sm font-bold transition-colors self-start outline-none p-1 rounded ${!isVisible ? 'text-base-700 cursor-not-allowed' : 'text-base-300 hover:text-base-50 hover:bg-base-700 active:scale-95'} ${isSettingsExpanded ? 'mb-2' : ''}`}
+                            className={`flex items-center gap-2 text-sm font-bold transition-colors outline-none p-1 rounded shrink-0 ${!isVisible ? 'text-base-700 cursor-not-allowed' : 'text-base-300 hover:text-base-50 hover:bg-base-700 active:scale-95'}`}
                             onClick={(e) => {
                                 e.stopPropagation();
                                 setIsSettingsExpanded(!isSettingsExpanded);
@@ -1769,8 +1943,15 @@ export default function TrackCard({
                             {isSettingsExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                         </button>
 
-                        {isSettingsExpanded && (
-                            <div className={`w-full bg-base-900 rounded-lg p-5 border border-base-700 flex flex-col gap-6 transition-opacity ${!isVisible ? 'opacity-50 pointer-events-none' : ''}`}>
+                        <span className="text-[10px] font-mono text-white tabular-nums select-none ml-auto">
+                            {formatTimestamp(displayTimeSec)} / {formatTimestamp((audioDuration || 0) + (offsetSec || 0))}
+                        </span>
+                    </div>
+                )}
+
+                {/* Collapsible Settings panel — toggle button lives in the bar above */}
+                {isExpanded && isSettingsExpanded && (
+                    <div className={`w-full bg-base-900 rounded-lg p-5 border border-base-700 flex flex-col gap-6 transition-opacity ${!isVisible ? 'opacity-50 pointer-events-none' : ''}`} onClick={(e) => e.stopPropagation()}>
 
                                 <div className="grid grid-cols-2 gap-8 pt-2">
                                     {/* Fades */}
@@ -1809,83 +1990,109 @@ export default function TrackCard({
                                             </div>
                                         </div>
                                         <div className="flex items-center justify-between mt-1">
-                                            <span className="text-sm font-medium text-base-300 flex items-center gap-2">
-                                                Speed
-                                                {parseFloat(speed) !== 1.0 && (
+                                            <span className="flex items-center gap-2 text-sm font-medium text-base-300">
+                                                {/* Label is the toggle: click to switch Speed ↔ Target BPM */}
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (bpm && bpm !== '[BPM]' && !isNaN(parseFloat(bpm))) {
+                                                            setUseTargetBpmMode(v => !v);
+                                                        }
+                                                    }}
+                                                    className={`transition-colors text-base-300 ${
+                                                        bpm && bpm !== '[BPM]' && !isNaN(parseFloat(bpm))
+                                                            ? 'hover:text-base-100 cursor-pointer'
+                                                            : 'cursor-default'
+                                                    }`}
+                                                    title={
+                                                        bpm && bpm !== '[BPM]' && !isNaN(parseFloat(bpm))
+                                                            ? useTargetBpmMode
+                                                                ? 'Click to switch to Speed slider'
+                                                                : 'Click to switch to Target BPM input'
+                                                            : 'Speed'
+                                                    }
+                                                >
+                                                    {useTargetBpmMode ? 'Target BPM' : 'Speed'}
+                                                </button>
+                                                {!useTargetBpmMode && parseFloat(speed) !== 1.0 && (
                                                     <button onClick={(e) => { e.stopPropagation(); setSpeedWithSync(1.0); }} className="text-base-500 hover:text-base-50 transition-colors" title="Reset to 1.0x">
                                                         <RotateCcw size={12} />
                                                     </button>
                                                 )}
                                             </span>
-                                        <div className="flex items-center gap-3">
-                                                {speedInputVal !== null ? (
+
+                                            {/* Speed slider mode */}
+                                            {!useTargetBpmMode && (
+                                                <div className="flex items-center gap-3 justify-end">
+                                                    {speedInputVal !== null ? (
+                                                        <input
+                                                            type="text"
+                                                            value={speedInputVal}
+                                                            autoFocus
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            onChange={(e) => setSpeedInputVal(e.target.value)}
+                                                            onBlur={(e) => {
+                                                                e.stopPropagation();
+                                                                const parsed = parseFloat(speedInputVal);
+                                                                if (!isNaN(parsed)) setSpeedWithSync(Math.min(SPEED_MAX, Math.max(SPEED_MIN, parsed)));
+                                                                setSpeedInputVal(null);
+                                                            }}
+                                                            onKeyDown={(e) => {
+                                                                e.stopPropagation();
+                                                                if (e.key === 'Enter') e.target.blur();
+                                                                if (e.key === 'Escape') setSpeedInputVal(null);
+                                                            }}
+                                                            className="bg-base-800 border border-base-700 rounded px-2.5 py-1 w-16 text-xs font-mono text-base-50 focus:border-base-500 outline-none text-right"
+                                                        />
+                                                    ) : (
+                                                        <span
+                                                            className="text-xs font-mono text-base-300 w-10 text-right cursor-text hover:text-base-100 transition-colors mt-0.5"
+                                                            title="Click to edit speed"
+                                                            onClick={(e) => { e.stopPropagation(); setSpeedInputVal(Number(speed).toFixed(2)); }}
+                                                        >
+                                                            {Number(speed).toFixed(2)}x
+                                                        </span>
+                                                    )}
                                                     <input
-                                                        type="text"
-                                                        value={speedInputVal}
-                                                        autoFocus
+                                                        type="range"
+                                                        min={SPEED_MIN}
+                                                        max={SPEED_MAX}
+                                                        step="0.01"
+                                                        value={speed}
                                                         onClick={(e) => e.stopPropagation()}
-                                                        onChange={(e) => setSpeedInputVal(e.target.value)}
+                                                        onChange={(e) => { e.stopPropagation(); setSpeedWithSync(parseFloat(e.target.value)); }}
+                                                        className="w-20 h-1 bg-base-700 rounded-lg appearance-none cursor-pointer accent-base-500 outline-none"
+                                                    />
+                                                </div>
+                                            )}
+
+                                            {/* Target BPM mode — type a desired BPM, speed auto-calculates from original BPM */}
+                                            {useTargetBpmMode && bpm && bpm !== '[BPM]' && !isNaN(parseFloat(bpm)) && (
+                                                <div className="flex items-center justify-end gap-2">
+                                                    <input
+                                                        type="number"
+                                                        min="20"
+                                                        max="300"
+                                                        step="1"
+                                                        defaultValue={effectiveBpm ?? Math.round(parseFloat(bpm))}
+                                                        key={`${bpm}-${speed}`}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') e.target.blur(); }}
                                                         onBlur={(e) => {
                                                             e.stopPropagation();
-                                                            const parsed = parseFloat(speedInputVal);
-                                                            if (!isNaN(parsed)) setSpeedWithSync(Math.min(SPEED_MAX, Math.max(SPEED_MIN, parsed)));
-                                                            setSpeedInputVal(null);
+                                                            const targetBpm = parseFloat(e.target.value);
+                                                            const originalBpm = parseFloat(bpm); // always the original analyzed BPM
+                                                            if (!isNaN(targetBpm) && originalBpm > 0) {
+                                                                const newSpeed = Math.min(SPEED_MAX, Math.max(SPEED_MIN, targetBpm / originalBpm));
+                                                                setSpeedWithSync(newSpeed);
+                                                            }
                                                         }}
-                                                        onKeyDown={(e) => {
-                                                            e.stopPropagation();
-                                                            if (e.key === 'Enter') e.target.blur();
-                                                            if (e.key === 'Escape') setSpeedInputVal(null);
-                                                        }}
-                                                        className="text-xs font-mono text-base-100 w-12 text-right bg-base-700 rounded px-1 outline-none border border-base-500"
+                                                        className="bg-base-800 border border-base-700 rounded px-2.5 py-1 w-24 text-xs font-mono text-base-50 focus:border-base-500 outline-none text-right [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                        title="Type target BPM — speed adjusts automatically from original BPM"
                                                     />
-                                                ) : (
-                                                    <span
-                                                        className="text-xs font-mono text-base-300 w-10 text-right cursor-text hover:text-base-100 transition-colors"
-                                                        title="Click to edit speed"
-                                                        onClick={(e) => { e.stopPropagation(); setSpeedInputVal(Number(speed).toFixed(2)); }}
-                                                    >
-                                                        {Number(speed).toFixed(2)}x
-                                                    </span>
-                                                )}
-                                                <input
-                                                    type="range"
-                                                    min={SPEED_MIN}
-                                                    max={SPEED_MAX}
-                                                    step="0.01"
-                                                    value={speed}
-                                                    onClick={(e) => e.stopPropagation()}
-                                                    onChange={(e) => { e.stopPropagation(); setSpeedWithSync(parseFloat(e.target.value)); }}
-                                                    className="w-20 h-1 bg-base-700 rounded-lg appearance-none cursor-pointer accent-base-500 outline-none"
-                                                />
-                                            </div>
+                                                </div>
+                                            )}
                                         </div>
-                                        {/* BPM override input — type a target BPM and the speed adjusts */}
-                                        {bpm && bpm !== '[BPM]' && !isNaN(parseFloat(bpm)) && (
-                                            <div className="flex items-center justify-between mt-1">
-                                                <span className="text-xs text-base-500">Target BPM</span>
-                                                <input
-                                                    type="number"
-                                                    min="20"
-                                                    max="300"
-                                                    step="1"
-                                                    defaultValue={Math.round(parseFloat(bpm))}
-                                                    key={bpm}
-                                                    onClick={(e) => e.stopPropagation()}
-                                                    onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') e.target.blur(); }}
-                                                    onBlur={(e) => {
-                                                        e.stopPropagation();
-                                                        const targetBpm = parseFloat(e.target.value);
-                                                        const originalBpm = parseFloat(bpm);
-                                                        if (!isNaN(targetBpm) && originalBpm > 0) {
-                                                            const newSpeed = Math.min(SPEED_MAX, Math.max(SPEED_MIN, targetBpm / originalBpm));
-                                                            setSpeedWithSync(newSpeed);
-                                                        }
-                                                    }}
-                                                    className="text-xs font-mono text-base-100 w-16 text-right bg-base-700 rounded px-1.5 py-0.5 outline-none border border-base-600 focus:border-base-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                                    title="Type a target BPM to set speed automatically"
-                                                />
-                                            </div>
-                                        )}
                                     </div>
                                 </div>
 
@@ -1932,15 +2139,15 @@ export default function TrackCard({
 
                                     {/* Equalizer */}
                                     <div className="shrink-0 w-60 p-4 bg-base-800 border border-base-700 rounded-lg">
-                                        <div className="flex items-center gap-2 mb-4">
+                                        <div className="flex items-center justify-between mb-4">
                                             <span className="text-[10px] font-bold text-base-400 uppercase tracking-wider">Equalizer</span>
                                             {(eqLow !== 0 || eqMid !== 0 || eqHigh !== 0 || eqKills.low || eqKills.mid || eqKills.high) && (
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); setEqLowWithSync(0); setEqMidWithSync(0); setEqHighWithSync(0); setEqKillsWithSync({ low: false, mid: false, high: false }); }}
-                                                    className="text-base-500 hover:text-base-50 transition-colors"
+                                                    className="flex items-center gap-1 text-[9px] text-base-400 hover:text-base-50 transition-colors"
                                                     title="Reset EQ"
                                                 >
-                                                    <RotateCcw size={12} />
+                                                    <RotateCcw size={9} /> Reset
                                                 </button>
                                             )}
                                         </div>
@@ -1972,7 +2179,18 @@ export default function TrackCard({
                                                                 thumb: 'bg-base-200 border-base-500 w-3.5 h-3.5',
                                                             }}
                                                         />
-                                                        <span className={`text-xs font-medium ${killed ? 'text-base-100' : 'text-base-300'}`}>{label}</span>
+                                                        <div className="flex items-center gap-1 mt-0.5">
+                                                            <span className={`text-xs font-medium ${killed ? 'text-base-100' : 'text-base-300'}`}>{label}</span>
+                                                            {value !== 0 && !killed && (
+                                                                <button
+                                                                    onClick={(e) => { e.stopPropagation(); set(0); }}
+                                                                    className="text-base-500 hover:text-base-50 transition-colors"
+                                                                    title={`Reset ${label} to 0dB`}
+                                                                >
+                                                                    <RotateCcw size={10} />
+                                                                </button>
+                                                            )}
+                                                        </div>
                                                         <span className={`text-[9px] tabular-nums ${killed ? 'text-base-300' : 'text-base-600'}`}>{freq}</span>
                                                         <button
                                                             onClick={(e) => { e.stopPropagation(); setEqKillsWithSync({ ...eqKills, [killKey]: !eqKills[killKey] }); }}
@@ -2084,8 +2302,6 @@ export default function TrackCard({
 
                                 </div>
 
-                            </div>
-                        )}
                     </div>
                 )}
             </div>

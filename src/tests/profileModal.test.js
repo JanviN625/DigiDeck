@@ -658,7 +658,7 @@ describe('SettingsModal — Controls tab', () => { // [NFR-003]
     it('shows Edit buttons for each action', () => {
         renderControlsTab();
         const editBtns = screen.getAllByText('Edit');
-        expect(editBtns).toHaveLength(9);
+        expect(editBtns).toHaveLength(10);
     });
 
     it('clicking Edit enters recording mode ("Press any key...")', () => {

@@ -11,7 +11,20 @@ import { useSettings, matchesKeybind } from '../utils/useSettings';
 
 export default function Header() {
     const { user, signOut } = useFirebaseAuth();
-    const { tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, handleClearAllTracks, handleOverwriteTracks, handleUndo, handleRedo } = useMix();
+    const { tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, handleUpdateTrack, handleClearAllTracks, handleOverwriteTracks, handleUndo, handleRedo } = useMix();
+
+    const handleSyncAllTracks = useCallback(() => {
+        tracks.forEach(track => {
+            const trackBpm = parseFloat(track.bpm);
+            if (!track.bpm || track.bpm === '[BPM]' || isNaN(trackBpm) || trackBpm <= 0) return;
+            const targetSpeed = Math.min(4.0, Math.max(0.25, masterBpm / trackBpm));
+            const syncedSegments = (track.initialSegments || []).map(seg => ({
+                ...seg,
+                speed: targetSpeed,
+            }));
+            handleUpdateTrack(track.id, { initialSegments: syncedSegments, initialSpeed: targetSpeed });
+        });
+    }, [tracks, masterBpm, handleUpdateTrack]);
     const { settings } = useSettings();
     const [projectName, setProjectName] = useState('Untitled project');
     const [isEditingProject, setIsEditingProject] = useState(false);
@@ -256,9 +269,19 @@ export default function Header() {
                         `}</style>
                     </div>
                     <div className="w-px h-4 bg-base-700 mx-1" />
+                    <button
+                        onClick={handleSyncAllTracks}
+                        disabled={tracks.length === 0}
+                        className="text-[10px] font-bold tracking-wider uppercase px-2 py-1 rounded border border-base-700 text-base-400 hover:text-base-100 hover:border-base-500 disabled:opacity-30 active:scale-95 transition-colors"
+                        title="Sync all tracks to Master BPM"
+                    >
+                        Sync All
+                    </button>
+                    <div className="w-px h-4 bg-base-700 mx-1" />
                     <div className="flex items-center gap-2 group w-32 px-1">
                         <ZoomIn size={12} className="text-base-500 group-hover:text-base-300 transition-colors shrink-0" />
                         <Slider
+                            aria-label="Global Zoom"
                             size="sm"
                             step={5}
                             maxValue={100}

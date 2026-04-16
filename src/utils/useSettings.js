@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS = {
     copySegment:     { key: 'c', ctrl: true,  shift: false, alt: false },
     pasteSegment:    { key: 'v', ctrl: true,  shift: false, alt: false },
     deleteSegment:   { key: 'Delete', ctrl: false, shift: false, alt: false },
+    magnetToggle:    { key: 'm',      ctrl: false, shift: false, alt: false },
   },
 };
 

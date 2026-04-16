@@ -74,6 +74,15 @@ jest.mock('../utils/useSettings', () => ({
             !!e.shiftKey === !!binding.shift &&
             !!e.altKey === !!binding.alt;
     },
+    formatKeybind: (binding) => {
+        if (!binding) return '';
+        const parts = [];
+        if (binding.ctrl)  parts.push('Ctrl');
+        if (binding.alt)   parts.push('Alt');
+        if (binding.shift) parts.push('Shift');
+        parts.push(binding.key === ' ' ? 'Space' : binding.key.toUpperCase());
+        return parts.join(' + ');
+    },
 }));
 
 jest.mock('../utils/helpers', () => ({
@@ -102,6 +111,7 @@ jest.mock('lucide-react', () => {
         X: icon('icon-x'),
         Plus: icon('icon-plus'),
         Power: icon('icon-power'),
+        Magnet: icon('icon-magnet'),
     };
 });
 
