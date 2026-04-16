@@ -226,7 +226,7 @@ export function AppProviders({ children }) {
                         ? trackData.title
                         : existing.title;
                     const otherTitles = prev.filter((_, i) => i !== emptyIndex).map(t => t.title);
-                    const slotDefaultSegments = existing.initialSegments ?? [{ id: Date.now(), startPct: 0, endPct: 1, isDeleted: false, isMuted: false, fadeIn: 0, fadeOut: 0, pitch: 0, speed: 1.0, eqLow: 0, eqMid: 0, eqHigh: 0, eqKills: { low: false, mid: false, high: false }, effects: [], masterTimePct: null }];
+                    const slotDefaultSegments = [{ id: Date.now(), startPct: 0, endPct: 1, isDeleted: false, isMuted: false, fadeIn: 0, fadeOut: 0, pitch: 0, speed: 1.0, eqLow: 0, eqMid: 0, eqHigh: 0, eqKills: { low: false, mid: false, high: false }, effects: [], masterTimePct: null }];
                     newTracks[emptyIndex] = {
                         ...existing,
                         initiallyExpanded: true,

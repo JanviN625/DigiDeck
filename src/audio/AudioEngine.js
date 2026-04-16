@@ -249,8 +249,16 @@ class AudioEngine {
         } else if (effectType === 'panner') {
             const panner = this.ctx.createStereoPanner();
             panner.pan.value = 0;
-            nodes = { inputGain: panner, outputGain: panner };
-            defaultParams = { pan: 0 };
+            const lfo = this.ctx.createOscillator();
+            const lfoGain = this.ctx.createGain();
+            lfo.type = 'sine';
+            lfo.frequency.value = 0; // 0 = static (no oscillation until user sets lfoRate > 0)
+            lfoGain.gain.value = 1.0;
+            lfo.connect(lfoGain);
+            lfoGain.connect(panner.pan);
+            lfo.start();
+            nodes = { inputGain: panner, outputGain: panner, lfo, lfoGain };
+            defaultParams = { pan: 0, lfoRate: 0, lfoDepth: 1.0 };
         } else {
             return null;
         }
@@ -311,7 +319,9 @@ class AudioEngine {
         } else if (effect.type === 'highpass' || effect.type === 'lowpass') {
             if (param === 'frequency') effect.nodes.inputGain.frequency.value = value;
         } else if (effect.type === 'panner') {
-            if (param === 'pan') effect.nodes.inputGain.pan.value = value;
+            if (param === 'pan')      effect.nodes.inputGain.pan.value = value;
+            if (param === 'lfoRate')  effect.nodes.lfo.frequency.value = value;
+            if (param === 'lfoDepth') effect.nodes.lfoGain.gain.value = value;
         }
     }
 
@@ -329,6 +339,10 @@ class AudioEngine {
             safe(nodes.feedback);
             safe(nodes.wetGain);
             safe(nodes.dryGain);
+        } else if (type === 'panner') {
+            try { nodes.lfo.stop(); } catch {}
+            safe(nodes.lfo);
+            safe(nodes.lfoGain);
         }
     }
 

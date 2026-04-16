@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, EyeOff, Move, Copy, Trash2, RotateCcw, AlertTriangle, X, Plus, Power, Magnet } from 'lucide-react';
+import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, EyeOff, Move, Copy, Trash2, RotateCcw, AlertTriangle, X, Plus, Power } from 'lucide-react';
 import { Slider } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
 import { EFFECT_CONFIGS } from '../utils/trackConfig';
@@ -8,7 +8,7 @@ import AudioEngineService, { audioBufferToWAV } from '../audio/AudioEngine';
 import WaveSurfer from 'wavesurfer.js';
 import { analyzeAudioBuffer } from '../audio/essentiaAnalyzer';
 import { useMix } from '../spotify/appContext';
-import { useSettings, matchesKeybind, formatKeybind } from '../utils/useSettings';
+import { useSettings, matchesKeybind } from '../utils/useSettings';
 
 const SPEED_MIN = 0.25;
 const SPEED_MAX = 2.0;
@@ -148,9 +148,13 @@ export default function TrackCard({
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
-    const [isSegmentMuted, setIsSegmentMuted] = useState(false);
+    const isSegmentMutedRef = useRef(false);     // not state — avoids re-triggering setEngVolume on segment transitions
     const [isVisible, setIsVisible] = useState(true);
     const [volume, setVolume] = useState(initialVolume);
+    // Sync refs — updated each render so stable callbacks (activateSegment, RAF loop) always read current values
+    const volumeRef   = useRef(initialVolume);
+    const isMutedRef  = useRef(false);
+    const isVisibleRef = useRef(true);
     const [pitch, setPitch] = useState(initialPitch);
     const [speed, setSpeed] = useState(initialSpeed);
     const [speedInputVal, setSpeedInputVal] = useState(null); // null = display mode, string = editing
@@ -164,9 +168,6 @@ export default function TrackCard({
     // Syncs with globalZoom when the global slider moves; per-track +/- adjusts independently from there.
     const [localZoom, setLocalZoom] = useState(globalZoom);
     useEffect(() => { setLocalZoom(globalZoom); }, [globalZoom]);
-    // Per-track magnet toggle. ON = segments packed from start; OFF = segments beat-positioned freely.
-    const [isMagnetOn, setIsMagnetOn] = useState(true);
-    const isMagnetOnRef = useRef(true);
     // Wall-clock duration at current speed. Slower speed → waveform stretches wider so beat markers align.
     const effectiveDuration = audioDuration > 0 ? audioDuration / Math.max(0.1, parseFloat(speed)) : 0;
     // Derived synchronously — no state lag when zoom changes.
@@ -176,8 +177,6 @@ export default function TrackCard({
     const [effects, setEffects] = useState([]);
     const [showAddEffectMenu, setShowAddEffectMenu] = useState(false);
     const [isDraggable, setIsDraggable] = useState(false);
-    const [draggedSegmentState, setDraggedSegmentState] = useState(null);
-    const [dragPreviewOrder, setDragPreviewOrder] = useState(null); // null = no drag in progress, else array of seg ids
     const [segments, setSegments] = useState(() => initialSegments ?? [makeDefaultSegment(0)]);
     const [activeSegmentId, setActiveSegmentId] = useState(() => (initialSegments ?? [makeDefaultSegment(0)])[0]?.id ?? 0);
     const [g6Dismissed, setG6Dismissed] = useState(false);
@@ -208,6 +207,20 @@ export default function TrackCard({
     const activateSegmentRef = useRef(null);
     const playWaitTimerRef = useRef(null);
     const waveBlobUrlRef = useRef(null); // current blob URL loaded into WaveSurfer
+    const originalBpmRef = useRef(null); // locked on first valid analysis — never drifts with speed/pitch changes
+
+    // Keep sync refs current each render so stable callbacks always see fresh values
+    volumeRef.current    = volume;
+    isMutedRef.current   = isMuted;
+    isVisibleRef.current = isVisible;
+
+    // Capture the first valid BPM from Essentia analysis as the immutable baseline.
+    // All Target BPM calculations divide by this value, preventing compounding drift.
+    useEffect(() => {
+        if (originalBpmRef.current === null && bpm && bpm !== '[BPM]' && !isNaN(parseFloat(bpm))) {
+            originalBpmRef.current = parseFloat(bpm);
+        }
+    }, [bpm]);
 
     // Show audio drop warning if triggered by Engine
     useEffect(() => {
@@ -258,11 +271,12 @@ export default function TrackCard({
         adjustedBeatPositionsRef.current = adjustedBeatPositions;
     }, [adjustedBeatPositions]);
 
-    // Effective BPM = original BPM × current speed. bpm prop is never mutated, so this is always accurate.
+    // Effective BPM = locked original BPM × current speed.
+    // Uses originalBpmRef so the display never drifts if the bpm prop is updated by async analysis.
     const effectiveBpm = useMemo(() => {
-        const parsed = parseFloat(bpm);
-        if (!bpm || bpm === '[BPM]' || isNaN(parsed)) return null;
-        return Math.round(parsed * parseFloat(speed));
+        const base = originalBpmRef.current ?? parseFloat(bpm);
+        if (!base || isNaN(base)) return null;
+        return Math.round(base * parseFloat(speed));
     }, [bpm, speed]);
 
     // Master BPM beat grid — evenly spaced at 60/masterBpm intervals, phase-locked to the master
@@ -289,17 +303,6 @@ export default function TrackCard({
         if (!effectiveBpm || !masterBpm) return false;
         return Math.abs(effectiveBpm - masterBpm) > 0.5;
     }, [effectiveBpm, masterBpm]);
-
-    // Longest track: the one whose effectiveDuration + offsetSec equals masterDuration.
-    // It cannot use free positioning — magnet is always ON for it.
-    const isLongestTrack = useMemo(() => {
-        if (!masterDuration || masterDuration <= 0 || !effectiveDuration) return false;
-        return Math.abs((offsetSec || 0) + effectiveDuration - masterDuration) < 0.1;
-    }, [masterDuration, effectiveDuration, offsetSec]);
-
-    useEffect(() => { if (isLongestTrack) setIsMagnetOn(true); }, [isLongestTrack]);
-    useEffect(() => { isMagnetOnRef.current = isMagnetOn; }, [isMagnetOn]);
-
 
     // Sync local speed state when the prop changes externally (e.g. Sync All from header).
     useEffect(() => {
@@ -445,10 +448,12 @@ export default function TrackCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [audioUrl, trackId, seek]);
 
-    // Handle Engine Volume
+    // Handle Engine Volume — only global track mute/visibility triggers this effect.
+    // Per-segment muting is applied directly in activateSegment and the RAF boundary handler
+    // so it never re-fires the global volume and accidentally interrupts fade ramps.
     useEffect(() => {
-        setEngVolume(isMuted || !isVisible || isSegmentMuted ? 0 : volume / 100);
-    }, [volume, isMuted, isVisible, isSegmentMuted, setEngVolume]);
+        setEngVolume(isMuted || !isVisible ? 0 : volume / 100);
+    }, [volume, isMuted, isVisible, setEngVolume]);
 
     // Handle Engine Pitch
     useEffect(() => {
@@ -549,11 +554,22 @@ export default function TrackCard({
         });
     }, [localZoom, speed]);
 
-    // When masterDuration changes (another track loads/unloads), the clip gets a new proportional width.
-    // WaveSurfer must re-zoom to 0 so it auto-fits the waveform to the new (narrower or wider) clip.
+    // Re-fit the waveform whenever the clip physically resizes in the DOM.
+    // containerWidth is set by the ResizeObserver on waveformRef, which fires AFTER the browser
+    // has computed the new layout — so WaveSurfer reads the correct clientWidth when zoom(0) runs.
+    // This is more reliable than reacting to masterDuration alone (which fires before layout).
+    useEffect(() => {
+        if (!wavesurferRef.current || !waveformReadyRef.current || localZoom !== 0 || containerWidth <= 0) return;
+        wavesurferRef.current.zoom(0);
+    }, [containerWidth, localZoom]);
+
+    // Belt-and-suspenders: also trigger on masterDuration change using rAF to wait for layout paint.
     useEffect(() => {
         if (!wavesurferRef.current || !waveformReadyRef.current || localZoom !== 0) return;
-        wavesurferRef.current.zoom(0);
+        const id = requestAnimationFrame(() => {
+            if (wavesurferRef.current && waveformReadyRef.current) wavesurferRef.current.zoom(0);
+        });
+        return () => cancelAnimationFrame(id);
     }, [masterDuration, effectiveDuration, localZoom]);
 
     // Scroll-wheel zoom — must be non-passive so preventDefault() actually stops page scroll.
@@ -645,8 +661,10 @@ export default function TrackCard({
         if (!seg) return;
         const next = !seg.isDeleted;
         syncActiveSegmentSettings({ isDeleted: next });
-        setIsSegmentMuted(next || seg.isMuted);
-    }, [syncActiveSegmentSettings]);
+        const segMuted = next || seg.isMuted;
+        isSegmentMutedRef.current = segMuted;
+        if (!isMutedRef.current && isVisibleRef.current) setEngVolume(segMuted ? 0 : volumeRef.current / 100);
+    }, [syncActiveSegmentSettings, setEngVolume]);
 
     // eslint-disable-next-line no-unused-vars
     const handleToggleMute = useCallback((e) => {
@@ -655,8 +673,10 @@ export default function TrackCard({
         if (!seg) return;
         const next = !seg.isMuted;
         syncActiveSegmentSettings({ isMuted: next });
-        setIsSegmentMuted(seg.isDeleted || next);
-    }, [syncActiveSegmentSettings]);
+        const segMuted = seg.isDeleted || next;
+        isSegmentMutedRef.current = segMuted;
+        if (!isMutedRef.current && isVisibleRef.current) setEngVolume(segMuted ? 0 : volumeRef.current / 100);
+    }, [syncActiveSegmentSettings, setEngVolume]);
 
     // Activate a segment: update ref immediately (so concurrent effects target the new segment),
     // apply all its audio settings to the engine, reconcile the effects chain, and sync UI state.
@@ -701,8 +721,11 @@ export default function TrackCard({
         setEqHigh(seg.eqHigh);
         setEffects(newEffects);
         setEqKills(kills);
-        setIsSegmentMuted(seg.isDeleted || false);
-    }, [trackId]);
+        // Apply segment muting directly — bypasses the volume useEffect so fade ramps aren't interrupted
+        const segMuted = seg.isDeleted || seg.isMuted || false;
+        isSegmentMutedRef.current = segMuted;
+        if (!isMutedRef.current && isVisibleRef.current) setEngVolume(segMuted ? 0 : volumeRef.current / 100);
+    }, [trackId, setEngVolume]);
 
     // Keep activateSegmentRef current for stable access inside WaveSurfer callbacks
     activateSegmentRef.current = activateSegment;
@@ -745,16 +768,18 @@ export default function TrackCard({
 
     const handleSync = useCallback((e) => {
         e.stopPropagation();
-        if (bpm !== '[BPM]' && !isNaN(parseFloat(bpm))) {
-            const parsedBpm = parseFloat(bpm);
-            if (parsedBpm > 0) {
-                const targetSpeed = masterBpm / parsedBpm;
-                const clampedSpeed = Math.min(4.0, Math.max(0.25, targetSpeed));
-                setSpeedWithSync(clampedSpeed);
-                // bpm prop is preserved as the original analyzed value — not overwritten
-            }
+        const baseBpm = originalBpmRef.current ?? (bpm !== '[BPM]' ? parseFloat(bpm) : NaN);
+        if (!isNaN(baseBpm) && baseBpm > 0) {
+            const targetSpeed = masterBpm / baseBpm;
+            const clampedSpeed = Math.min(4.0, Math.max(0.25, targetSpeed));
+            // Update display state immediately
+            setSpeed(clampedSpeed);
+            // Persist to ALL segments so seeking/playhead movement won't revert the synced speed
+            setSegments(prev => prev.map(s => ({ ...s, speed: clampedSpeed })));
+            // Apply to audio engine so currently-playing audio updates immediately
+            AudioEngineService.setSpeed(trackId, clampedSpeed);
         }
-    }, [bpm, masterBpm, setSpeedWithSync]);
+    }, [bpm, masterBpm, trackId]);
 
     // Split track at playhead position — inserts a cut point into the segments array.
     // Cut snaps to the nearest beat/half-beat when Essentia data is available.
@@ -856,209 +881,99 @@ export default function TrackCard({
         document.addEventListener('mouseup', handleMouseUp);
     }, [masterDuration, offsetSec, trackId, tracks, handleOverwriteTracks, masterBpm]);
 
-    // Reorder segments by dragging their handle bar. Segments snap together with no gaps.
-    const handleSegmentDragStart = useCallback((e, seg) => {
-        e.stopPropagation();
-        e.preventDefault();
-
-        const liveSegs = segmentsRef.current; // snapshot at drag start (sorted by startPct)
-        const startX = e.clientX;
-
-        // ── REORDER MODE: drag to reorder segments + remap audio buffer ────────
-        // Magnet ON = snap to nearest beat during drag. Magnet OFF = free reorder without snap.
-        if (liveSegs.length < 2) return; // nothing to reorder with a single segment
-
-        const laneWidth = laneRef.current?.clientWidth || 800;
-        const draggedIdx = liveSegs.findIndex(s => s.id === seg.id);
-        if (draggedIdx === -1) return;
-
-        // Build initial preview order from current segment order
-        let currentPreviewIds = liveSegs.map(s => s.id);
-        setDraggedSegmentState({ id: seg.id, dx: 0 });
-        setDragPreviewOrder(currentPreviewIds);
-
-        const handleMouseMove = (moveEvent) => {
-            let dx = moveEvent.clientX - startX;
-
-            // Snap left edge of dragged segment to nearest master beat grid line (12px radius).
-            // Only snaps when magnet is ON — magnet OFF allows free reorder without snapping.
-            if (isMagnetOnRef.current) {
-                const beats = masterBeatGridRef.current;
-                if (beats.length > 0 && audioDuration > 0 && laneWidth > 0) {
-                    const newStartPct = seg.startPct + dx / laneWidth;
-                    const newStartSec = newStartPct * audioDuration;
-                    let nearestBeat = beats[0], minDist = Math.abs(newStartSec - beats[0]);
-                    for (const b of beats) {
-                        const d = Math.abs(newStartSec - b);
-                        if (d < minDist) { minDist = d; nearestBeat = b; }
-                    }
-                    const snapThresholdSec = (12 / laneWidth) * audioDuration;
-                    if (minDist < snapThresholdSec) {
-                        dx = (nearestBeat / audioDuration - seg.startPct) * laneWidth;
-                    }
-                }
-            }
-
-            setDraggedSegmentState({ id: seg.id, dx });
-
-            // Determine where the dragged segment's center would land as a pct of the lane
-            const draggedSize = seg.endPct - seg.startPct;
-            const newCenterPct = seg.startPct + draggedSize / 2 + dx / laneWidth;
-
-            // Compute cumulative midpoints of all other segments (in current order without dragged)
-            const others = liveSegs.filter(s => s.id !== seg.id);
-            let cursor = 0;
-            const positions = []; // {id, midPct}
-            for (const s of others) {
-                const size = s.endPct - s.startPct;
-                positions.push({ id: s.id, midPct: cursor + size / 2 });
-                cursor += size;
-            }
-
-            // Find insert position: insert before the first other whose mid is > dragged center
-            let insertBefore = positions.findIndex(p => newCenterPct < p.midPct);
-            if (insertBefore === -1) insertBefore = positions.length; // place at end
-
-            const newOrder = [...others.map(s => s.id)];
-            newOrder.splice(insertBefore, 0, seg.id);
-
-            if (newOrder.join(',') !== currentPreviewIds.join(',')) {
-                currentPreviewIds = newOrder;
-                setDragPreviewOrder(newOrder);
-            }
-        };
-
-        const handleMouseUp = async () => {
-            document.removeEventListener('mousemove', handleMouseMove);
-            document.removeEventListener('mouseup', handleMouseUp);
-
-            setDraggedSegmentState(null);
-            setDragPreviewOrder(null);
-
-            // No-op if order is unchanged
-            if (currentPreviewIds.join(',') === liveSegs.map(s => s.id).join(',')) return;
-
-            setIsAnalysing(true);
-
-            const trackObj = AudioEngineService.tracks.get(trackId);
-            if (!trackObj?.audioBuffer) { setIsAnalysing(false); return; }
-
-            const oldBuf = trackObj.audioBuffer;
-            const sr = oldBuf.sampleRate;
-            const channels = oldBuf.numberOfChannels;
-            const totalFrames = oldBuf.length;
-            const segById = Object.fromEntries(liveSegs.map(s => [s.id, s]));
-
-            // Build new buffer by copying slices in the new order
-            const newBuf = AudioEngineService.ctx.createBuffer(channels, totalFrames, sr);
-            for (let ch = 0; ch < channels; ch++) {
-                const oldData = oldBuf.getChannelData(ch);
-                const newData = newBuf.getChannelData(ch);
-                let writePos = 0;
-                for (const id of currentPreviewIds) {
-                    const s = segById[id];
-                    const sf = Math.floor(s.startPct * totalFrames);
-                    const ef = Math.floor(s.endPct * totalFrames);
-                    const len = ef - sf;
-                    if (len > 0) { newData.set(oldData.subarray(sf, ef), writePos); writePos += len; }
-                }
-            }
-
-            // Recalculate contiguous startPct/endPct from actual frame counts
-            let pos = 0;
-            const reordered = currentPreviewIds.map(id => {
-                const s = segById[id];
-                const sf = Math.floor(s.startPct * totalFrames);
-                const ef = Math.floor(s.endPct * totalFrames);
-                const size = (ef - sf) / totalFrames;
-                const updated = { ...s, startPct: pos, endPct: pos + size };
-                pos += size;
-                return updated;
-            });
-
-            // Patch AudioEngine immediately so playback reflects new order
-            trackObj.audioBuffer = newBuf;
-            trackObj.duration = newBuf.duration;
-
-            // Render waveform immediately from pre-computed peaks — no WAV encode needed.
-            // WaveSurfer.load(url, peaks, duration) draws peaks without decoding when peaks are provided.
-            const peaks = computeWaveformPeaks(newBuf);
-            if (wavesurferRef.current && waveBlobUrlRef.current) {
-                waveformReadyRef.current = false;
-                wavesurferRef.current.load(waveBlobUrlRef.current, peaks, newBuf.duration);
-            }
-
-            // Update UI state — segments snap to new positions immediately
-            setSegments(reordered);
-            setAudioDuration(newBuf.duration);
-            setIsAnalysing(false);
-
-            // Defer WAV encode purely for persistence (no waveform reload needed)
-            setTimeout(() => {
-                const wavObj = audioBufferToWAV(newBuf);
-                const newBlob = new Blob([wavObj], { type: 'audio/wav' });
-                if (waveBlobUrlRef.current) URL.revokeObjectURL(waveBlobUrlRef.current);
-                waveBlobUrlRef.current = URL.createObjectURL(newBlob);
-                handleUpdateTrack(trackId, {
-                    initialSegments: reordered,
-                    audioBlob: newBlob,
-                    beatPositions: [],
-                });
-            }, 0);
-        };
-
-        document.addEventListener('mousemove', handleMouseMove);
-        document.addEventListener('mouseup', handleMouseUp);
-    }, [trackId, handleUpdateTrack, audioDuration]);
-
-    // Disambiguates click vs drag on a segment overlay.
-    // A movement of >5px in any direction starts a drag; release without moving seeks + activates.
+    // Click on a segment overlay — seek to the clicked position and activate that segment.
+    // Reordering is handled by the segment strip below the waveform, not by dragging on the overlay.
     const handleSegmentOverlayMouseDown = useCallback((e, seg) => {
         if (seg.isDeleted) return;
         e.stopPropagation();
-
-        const startX = e.clientX;
-        const startY = e.clientY;
-        let dragging = false;
-
-        const onMove = (mv) => {
-            if (!dragging && (Math.abs(mv.clientX - startX) > 5 || Math.abs(mv.clientY - startY) > 5)) {
-                dragging = true;
-                document.removeEventListener('mousemove', onMove);
-                document.removeEventListener('mouseup', onUp);
-                handleSegmentDragStart({ clientX: startX, stopPropagation: () => {}, preventDefault: () => {} }, seg);
-            }
-        };
-
         const onUp = (upEvent) => {
-            document.removeEventListener('mousemove', onMove);
             document.removeEventListener('mouseup', onUp);
-            if (!dragging) {
-                // Use the waveform viewport (scrollContainerRef) as the reference — not the
-                // full lane — so the position is correct regardless of clip width or zoom level.
-                const containerEl = scrollContainerRef.current;
-                const containerRect = containerEl?.getBoundingClientRect();
-                if (!containerRect) return;
-                // scrollWidth is the full waveform canvas width (zoomed or not)
-                const totalWidth = containerEl.scrollWidth || containerRect.width || 1;
-                const clickX = upEvent.clientX - containerRect.left + (containerEl.scrollLeft || 0);
-                const pct = Math.max(0, Math.min(1, clickX / totalWidth));
-                const timeSec = pct * (audioDuration || 0);
-                seek(timeSec);
-                handleSeekMaster(timeSec + (offsetSec || 0));
-                if (durationRef.current > 0) {
-                    const clickedSeg = segmentsRef.current?.find(s => pct >= s.startPct && pct < s.endPct);
-                    if (clickedSeg) activateSegmentRef.current?.(clickedSeg.id);
-                    currentTimePctRef.current = pct;
-                    if (wavesurferRef.current) wavesurferRef.current.seekTo(pct);
-                }
-                setDisplayTimeSec(timeSec);
+            const containerEl = scrollContainerRef.current;
+            const containerRect = containerEl?.getBoundingClientRect();
+            if (!containerRect) return;
+            const totalWidth = containerEl.scrollWidth || containerRect.width || 1;
+            const clickX = upEvent.clientX - containerRect.left + (containerEl.scrollLeft || 0);
+            const pct = Math.max(0, Math.min(1, clickX / totalWidth));
+            const timeSec = pct * (audioDuration || 0);
+            seek(timeSec);
+            handleSeekMaster(timeSec + (offsetSec || 0));
+            if (durationRef.current > 0) {
+                const clickedSeg = segmentsRef.current?.find(s => pct >= s.startPct && pct < s.endPct);
+                if (clickedSeg) activateSegmentRef.current?.(clickedSeg.id);
+                currentTimePctRef.current = pct;
+                if (wavesurferRef.current) wavesurferRef.current.seekTo(pct);
             }
+            setDisplayTimeSec(timeSec);
         };
-
-        document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
-    }, [audioDuration, offsetSec, seek, handleSeekMaster, handleSegmentDragStart]);
+    }, [audioDuration, offsetSec, seek, handleSeekMaster]);
+
+    // Reorder segments — rebuilds the audio buffer in the new ID order.
+    // Identical to the drag drop logic, but called directly by the strip's swap buttons.
+    const handleReorderSegments = useCallback(async (newOrderIds) => {
+        const liveSegs = segmentsRef.current;
+        if (!liveSegs || newOrderIds.join(',') === liveSegs.map(s => s.id).join(',')) return;
+        setIsAnalysing(true);
+        const trackObj = AudioEngineService.tracks.get(trackId);
+        if (!trackObj?.audioBuffer) { setIsAnalysing(false); return; }
+        const oldBuf = trackObj.audioBuffer;
+        const channels = oldBuf.numberOfChannels;
+        const totalFrames = oldBuf.length;
+        const segById = Object.fromEntries(liveSegs.map(s => [s.id, s]));
+        const newBuf = AudioEngineService.ctx.createBuffer(channels, totalFrames, oldBuf.sampleRate);
+        for (let ch = 0; ch < channels; ch++) {
+            const oldData = oldBuf.getChannelData(ch);
+            const newData = newBuf.getChannelData(ch);
+            let writePos = 0;
+            for (const id of newOrderIds) {
+                const s = segById[id];
+                const sf = Math.floor(s.startPct * totalFrames);
+                const ef = Math.floor(s.endPct * totalFrames);
+                const len = ef - sf;
+                if (len > 0) { newData.set(oldData.subarray(sf, ef), writePos); writePos += len; }
+            }
+        }
+        let pos = 0;
+        const reordered = newOrderIds.map(id => {
+            const s = segById[id];
+            const sf = Math.floor(s.startPct * totalFrames);
+            const ef = Math.floor(s.endPct * totalFrames);
+            const size = (ef - sf) / totalFrames;
+            const updated = { ...s, startPct: pos, endPct: pos + size };
+            pos += size;
+            return updated;
+        });
+        trackObj.audioBuffer = newBuf;
+        trackObj.duration = newBuf.duration;
+        const peaks = computeWaveformPeaks(newBuf);
+        if (wavesurferRef.current && waveBlobUrlRef.current) {
+            waveformReadyRef.current = false;
+            wavesurferRef.current.load(waveBlobUrlRef.current, peaks, newBuf.duration);
+        }
+        setSegments(reordered);
+        setAudioDuration(newBuf.duration);
+        setIsAnalysing(false);
+        setTimeout(() => {
+            const wavObj = audioBufferToWAV(newBuf);
+            const newBlob = new Blob([wavObj], { type: 'audio/wav' });
+            if (waveBlobUrlRef.current) URL.revokeObjectURL(waveBlobUrlRef.current);
+            waveBlobUrlRef.current = URL.createObjectURL(newBlob);
+            handleUpdateTrack(trackId, { initialSegments: reordered, audioBlob: newBlob, beatPositions: [] });
+        }, 0);
+    }, [trackId, handleUpdateTrack]);
+
+    // Swap a segment one position left or right in the strip.
+    const handleSwapSegment = useCallback((segId, direction) => {
+        const liveSegs = segmentsRef.current;
+        if (!liveSegs) return;
+        const idx = liveSegs.findIndex(s => s.id === segId);
+        if (idx === -1) return;
+        const targetIdx = direction === 'left' ? idx - 1 : idx + 1;
+        if (targetIdx < 0 || targetIdx >= liveSegs.length) return;
+        const newOrder = liveSegs.map(s => s.id);
+        [newOrder[idx], newOrder[targetIdx]] = [newOrder[targetIdx], newOrder[idx]];
+        handleReorderSegments(newOrder);
+    }, [handleReorderSegments]);
 
     // CTRL+S — split at playhead only for the card currently under the cursor.
     // CTRL+C / CTRL+V to copy/paste the active segment.
@@ -1070,11 +985,6 @@ export default function TrackCard({
             if (matchesKeybind(e, settings.keybinds.splitAtPlayhead)) {
                 e.preventDefault();
                 handleSplit();
-            }
-
-            if (matchesKeybind(e, settings.keybinds.magnetToggle)) {
-                e.preventDefault();
-                if (!isLongestTrack) setIsMagnetOn(v => !v);
             }
 
             // Copy segment
@@ -1290,7 +1200,7 @@ export default function TrackCard({
         };
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
-    }, [isExpanded, audioUrl, handleSplit, settings.keybinds.splitAtPlayhead, settings.keybinds.copySegment, settings.keybinds.pasteSegment, settings.keybinds.deleteSegment, segments, trackId, bpm, trackKey, handleAddTrack, trackName, settings, masterTimeRef, beatPositions, handleUpdateTrack, offsetSec, isLongestTrack]);
+    }, [isExpanded, audioUrl, handleSplit, settings.keybinds.splitAtPlayhead, settings.keybinds.copySegment, settings.keybinds.pasteSegment, settings.keybinds.deleteSegment, segments, trackId, bpm, trackKey, handleAddTrack, trackName, settings, masterTimeRef, beatPositions, handleUpdateTrack, offsetSec]);
 
     // Play Pause Sync
     useEffect(() => {
@@ -1417,7 +1327,10 @@ export default function TrackCard({
                         setEqHigh(playingSeg.eqHigh);
                         setEqKills(playingSeg.eqKills || { low: false, mid: false, high: false });
                         setEffects(newEffects);
-                        setIsSegmentMuted(playingSeg.isDeleted || playingSeg.isMuted || false);
+                        // Apply segment muting directly — avoids triggering the volume useEffect mid-playback
+                        const segMuted = playingSeg.isDeleted || playingSeg.isMuted || false;
+                        isSegmentMutedRef.current = segMuted;
+                        if (!isMutedRef.current && isVisibleRef.current) setEngVolume(segMuted ? 0 : volumeRef.current / 100);
                     }
                 }
 
@@ -1449,6 +1362,142 @@ export default function TrackCard({
         return () => cancelAnimationFrame(frameId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isPlaying, trackId, applyFadeIn, applyFadeOut, waveformPixelWidth, offsetSec]);
+
+    // ── Memoized effect visuals ─────────────────────────────────────────────────
+    // Isolated from RAF/displayTimeSec updates — only rebuilds when segment data,
+    // zoom, or duration change.
+    const segmentEffectVisuals = useMemo(() => {
+        if (!audioUrl || audioDuration <= 0) return null;
+        const px = localZoom > 0 && waveformPixelWidth > 0;
+        const toLeft  = (pct) => px ? `${pct * waveformPixelWidth}px` : `${pct * 100}%`;
+        const toWidth = (pct) => px ? `${pct * waveformPixelWidth}px` : `${pct * 100}%`;
+
+        return segments.map(seg => {
+            if (seg.isDeleted || seg.isMuted) return null;
+
+            const segL = toLeft(seg.startPct);
+            const segW = toWidth(seg.endPct - seg.startPct);
+
+            const fx      = seg.effects || [];
+            const volFx   = fx.find(e => e.type === 'volume'     && e.enabled);
+            const panFx   = fx.find(e => e.type === 'panner'     && e.enabled);
+            const filterFx = fx.find(e => e.type === 'filter'    && e.enabled);
+            const reverbFx = fx.find(e => e.type === 'reverb'    && e.enabled);
+            const delayFx  = fx.find(e => e.type === 'delay'     && e.enabled);
+            const compFx   = fx.find(e => e.type === 'compressor'&& e.enabled);
+
+            // Volume line — always visible; position encodes gain (0→bottom, 1.0→center, 2.0→top)
+            const gain   = volFx ? (volFx.params?.gain ?? 1.0) : 1.0;
+            const volTop = `${(1 - Math.max(0, Math.min(1, gain / 2.0))) * 100}%`;
+
+            // Speed tint — hidden at default (1.0)
+            const dSpd  = seg.speed - 1.0;
+            const spdOp = dSpd !== 0 ? Math.max(0.12, Math.min(0.30, Math.abs(dSpd) * 0.20)) : 0;
+            const spdBg = dSpd > 0 ? `rgba(251,146,60,${spdOp})` : `rgba(96,165,250,${spdOp})`;
+
+            // Pan gradient — hidden when pan === 0
+            const pan     = panFx ? (panFx.params?.pan ?? 0) : 0;
+            const panGrad = pan !== 0
+                ? pan < 0
+                    ? `linear-gradient(to right,rgba(236,72,153,${Math.min(0.45, Math.abs(pan)*0.5)}),transparent 65%)`
+                    : `linear-gradient(to left, rgba(236,72,153,${Math.min(0.45, Math.abs(pan)*0.5)}),transparent 65%)`
+                : null;
+
+            // Filter — hidden at defaults (highpass 300 Hz)
+            let filterGrad = null;
+            if (filterFx) {
+                const freq  = filterFx.params?.frequency  ?? 300;
+                const fType = filterFx.params?.filterType ?? 'highpass';
+                if (freq !== 300 || fType !== 'highpass') {
+                    const frac = Math.log10(Math.max(20, freq) / 20) / Math.log10(20000 / 20);
+                    filterGrad = fType === 'highpass'
+                        ? `linear-gradient(to right,rgba(34,197,94,0.30),transparent ${Math.min(75,frac*70+8)}%)`
+                        : `linear-gradient(to left, rgba(34,197,94,0.30),transparent ${Math.min(75,(1-frac)*70+8)}%)`;
+                }
+            }
+
+            // EQ — hidden when all bands at 0 and no kills
+            const eqBands = [
+                { v: seg.eqLow,  k: seg.eqKills?.low,  label: 'Low'  },
+                { v: seg.eqMid,  k: seg.eqKills?.mid,  label: 'Mid'  },
+                { v: seg.eqHigh, k: seg.eqKills?.high, label: 'High' },
+            ];
+            const hasEq = eqBands.some(b => b.k || b.v !== 0);
+
+            // Reverb — hidden at default mix (0.3)
+            const reverbMix  = reverbFx?.params?.mix ?? 0.3;
+            const reverbGrad = (reverbFx && reverbMix !== 0.3)
+                ? `linear-gradient(to top, rgba(129,140,248,${0.25 + reverbMix * 0.35}), transparent 40%)`
+                : null;
+
+            // Delay — hidden when all params at defaults
+            const delayMix  = delayFx?.params?.mix      ?? 0.5;
+            const delayTime = delayFx?.params?.time     ?? 0.25;
+            const delayFb   = delayFx?.params?.feedback ?? 0.3;
+            const delayGrad = (delayFx && (delayMix !== 0.5 || delayTime !== 0.25 || delayFb !== 0.3))
+                ? `linear-gradient(to top, rgba(34,211,238,${0.20 + delayMix * 0.30}), transparent 35%)`
+                : null;
+
+            // Compressor — hidden when all params at defaults
+            const compThresh = compFx?.params?.threshold ?? -24;
+            const compRatio  = compFx?.params?.ratio     ?? 4;
+            const compKnee   = compFx?.params?.knee      ?? 10;
+            const compGrad = (compFx && (compThresh !== -24 || compRatio !== 4 || compKnee !== 10))
+                ? `linear-gradient(to top, rgba(250,204,21,0.30), transparent 25%)`
+                : null;
+
+            // Fades — hidden when 0
+            const fiFrac = seg.fadeIn  > 0 ? Math.min(seg.fadeIn  / audioDuration, seg.endPct - seg.startPct) : 0;
+            const foFrac = seg.fadeOut > 0 ? Math.min(seg.fadeOut / audioDuration, seg.endPct - seg.startPct) : 0;
+
+            return (
+                <React.Fragment key={`segfx-${seg.id}`}>
+                    {/* Fade In — dark triangle, right angle at top-left */}
+                    {fiFrac > 0 && (
+                        <div className="absolute top-0 bottom-0 pointer-events-none z-[5]"
+                            style={{ left: toLeft(seg.startPct), width: toWidth(fiFrac) }}>
+                            <div className="absolute inset-0" style={{ background: 'rgba(8,10,14,0.55)', clipPath: 'polygon(0% 0%, 100% 0%, 0% 100%)' }} />
+                        </div>
+                    )}
+                    {/* Fade Out — dark triangle, right angle at top-right */}
+                    {foFrac > 0 && (
+                        <div className="absolute top-0 bottom-0 pointer-events-none z-[5]"
+                            style={{ left: toLeft(seg.endPct - foFrac), width: toWidth(foFrac) }}>
+                            <div className="absolute inset-0" style={{ background: 'rgba(8,10,14,0.55)', clipPath: 'polygon(0% 0%, 100% 0%, 100% 100%)' }} />
+                        </div>
+                    )}
+
+                    {/* Segment-scoped overlays */}
+                    <div className="absolute top-0 bottom-0 pointer-events-none overflow-hidden z-[4]"
+                        style={{ left: segL, width: segW }}>
+                        {spdOp > 0       && <div className="absolute inset-0" style={{ backgroundColor: spdBg }} />}
+                        {panGrad         && <div className="absolute inset-0" style={{ background: panGrad }} />}
+                        {filterGrad      && <div className="absolute inset-0" style={{ background: filterGrad }} />}
+                        {reverbGrad      && <div className="absolute inset-0" style={{ background: reverbGrad }} />}
+                        {delayGrad       && <div className="absolute inset-0" style={{ background: delayGrad }} />}
+                        {compGrad        && <div className="absolute inset-0" style={{ background: compGrad }} />}
+
+                        {/* Volume line — always visible */}
+                        <div className="absolute left-0 right-0 pointer-events-none"
+                            style={{ top: volTop, height: '2px', backgroundColor: 'rgba(251,146,60,0.9)' }} />
+
+                        {/* EQ bars — only when non-default */}
+                        {hasEq && (
+                            <div className="absolute top-0 left-0 right-0 flex pointer-events-none" style={{ height: 10 }}>
+                                {eqBands.map(({ v, k, label }, i) => {
+                                    if (k)    return <div key={i} title={`${label}: Killed`} className="flex-1 mx-px" style={{ backgroundColor: 'rgba(239,68,68,0.85)' }} />;
+                                    if (!v)   return null;
+                                    const op  = Math.max(0.45, Math.min(0.90, Math.abs(v) / 15));
+                                    return <div key={i} title={`${label}: ${v > 0 ? '+' : ''}${v} dB`} className="flex-1 mx-px" style={{ backgroundColor: v > 0 ? `rgba(74,222,128,${op})` : `rgba(239,68,68,${op})` }} />;
+                                })}
+                            </div>
+                        )}
+                    </div>
+                </React.Fragment>
+            );
+        });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [segments, audioDuration, waveformPixelWidth, localZoom, audioUrl]);
 
     return (
         <div className="relative">
@@ -1570,29 +1619,6 @@ export default function TrackCard({
                                 title="Duplicate track"
                             >
                                 <Copy size={14} />
-                            </button>
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (!isLongestTrack) setIsMagnetOn(v => !v);
-                                }}
-                                disabled={isLongestTrack}
-                                className={`p-1.5 rounded transition-colors active:scale-95 ${
-                                    isLongestTrack
-                                        ? 'text-base-700 cursor-not-allowed'
-                                        : isMagnetOn
-                                            ? 'text-orange-400 bg-orange-500/10 hover:bg-orange-500/20'
-                                            : 'text-base-400 hover:text-base-50 hover:bg-base-700'
-                                }`}
-                                title={
-                                    isLongestTrack
-                                        ? 'Longest track — layout locked (segment reorder only)'
-                                        : isMagnetOn
-                                            ? `Magnet ON — segments packed from start [${formatKeybind(settings.keybinds.magnetToggle)}]`
-                                            : `Magnet OFF — segments beat-positioned [${formatKeybind(settings.keybinds.magnetToggle)}]`
-                                }
-                            >
-                                <Magnet size={14} />
                             </button>
                             <div className="w-px h-4 bg-base-700 mx-0.5"></div>
                             <button
@@ -1781,13 +1807,15 @@ export default function TrackCard({
                                 transition: isDragged ? 'none' : 'left 0.1s ease-out'
                             }}
                         >
-                            {/* Consolidated Scroll Viewport for Syncing WaveSurfer and Bars Natively */}
+                            {/* Consolidated Scroll Viewport — flex-col so the segment strip lives inside
+                                and scrolls with the waveform at any zoom level. */}
                             <div
                                 ref={scrollContainerRef}
-                                className="relative flex-1 min-w-full overflow-x-auto overflow-y-hidden scrollbar-hide bg-base-900"
+                                className="flex flex-col flex-1 min-w-full overflow-x-auto overflow-y-hidden scrollbar-hide bg-base-900"
                             >
-                                {/* Inner Track Scale Canvas — stretches to waveformPixelWidth so native scrolling captures everything */}
-                                <div style={{ width: waveformPixelWidth > 0 ? waveformPixelWidth : '100%', minWidth: '100%', height: '100%', position: 'relative' }}>
+                                {/* Inner Track Scale Canvas — stretches to waveformPixelWidth so native scrolling captures everything.
+                                    At zoom=0 we MUST use '100%' so the canvas shrinks with the clip when a longer track is added. */}
+                                <div style={{ width: localZoom > 0 && waveformPixelWidth > 0 ? waveformPixelWidth : '100%', minWidth: '100%', flex: '1 0 0', position: 'relative' }}>
                                     
                                     {/* WaveSurfer rendering target */}
                                     <div ref={waveformRef} className="absolute inset-0"></div>
@@ -1795,33 +1823,8 @@ export default function TrackCard({
                                     {/* Locked Visual Overlay Target */}
                                     <div className="absolute inset-0 pointer-events-none z-[15]">
                                         
-                                        {/* Fade overlays */}
-                                        {audioDuration > 0 && segments.flatMap(seg => {
-                                            const overlays = [];
-                                            if (seg.fadeIn > 0) {
-                                                const fw = Math.min(seg.fadeIn / audioDuration, seg.endPct - seg.startPct);
-                                                const style = localZoom === 0
-                                                    ? { left: `${seg.startPct * 100}%`, width: `${fw * 100}%`, height: '100%' }
-                                                    : { left: seg.startPct * waveformPixelWidth, width: fw * waveformPixelWidth, height: '100%' };
-                                                overlays.push(
-                                                    <svg key={`fi-${seg.id}`} className="absolute inset-y-0 pointer-events-none z-[2]" style={style} preserveAspectRatio="none" viewBox="0 0 100 100">
-                                                        <polygon points="0,0 100,0 0,100" fill="rgba(8,10,14,0.5)" />
-                                                    </svg>
-                                                );
-                                            }
-                                            if (seg.fadeOut > 0) {
-                                                const fw = Math.min(seg.fadeOut / audioDuration, seg.endPct - seg.startPct);
-                                                const style = localZoom === 0
-                                                    ? { left: `${(seg.endPct - fw) * 100}%`, width: `${fw * 100}%`, height: '100%' }
-                                                    : { left: (seg.endPct - fw) * waveformPixelWidth, width: fw * waveformPixelWidth, height: '100%' };
-                                                overlays.push(
-                                                    <svg key={`fo-${seg.id}`} className="absolute inset-y-0 pointer-events-none z-[2]" style={style} preserveAspectRatio="none" viewBox="0 0 100 100">
-                                                        <polygon points="0,0 100,0 100,100" fill="rgba(8,10,14,0.5)" />
-                                                    </svg>
-                                                );
-                                            }
-                                            return overlays;
-                                        })}
+                                        {/* Per-segment effect visuals — memoized, isolated from RAF ticks */}
+                                        {segmentEffectVisuals}
 
                                         {/* Master BPM beat grid — faint phase-locked lines, visible at localZoom >= 65 */}
                                         {localZoom >= 65 && audioDuration > 0 && masterBeatGrid.length > 0 && waveformPixelWidth > 0 && (
@@ -1849,79 +1852,83 @@ export default function TrackCard({
                                             </div>
                                         )}
 
-                                        {/* Segment region highlights */}
+
+                                        {/* Segment region highlights — click to seek + activate. Reorder via strip below. */}
                                         {audioUrl && segments.map(seg => {
-                                            const isDragging = draggedSegmentState?.id === seg.id;
                                             const isActive = seg.id === activeSegmentId;
-                                            const lanePixels = waveformPixelWidth || laneRef.current?.clientWidth || 800;
-
-                                            // Compute preview translateX for non-dragged segments during a reorder drag
-                                            let previewTranslate = 'none';
-                                            if (dragPreviewOrder && draggedSegmentState) {
-                                                if (isDragging) {
-                                                    previewTranslate = `translateX(${draggedSegmentState.dx}px)`;
-                                                } else {
-                                                    const previewIdx = dragPreviewOrder.indexOf(seg.id);
-                                                    if (previewIdx !== -1) {
-                                                        let previewStart = 0;
-                                                        for (let i = 0; i < previewIdx; i++) {
-                                                            const ps = segments.find(s => s.id === dragPreviewOrder[i]);
-                                                            if (ps) previewStart += (ps.endPct - ps.startPct);
-                                                        }
-                                                        const offsetPx = (previewStart - seg.startPct) * lanePixels;
-                                                        previewTranslate = `translateX(${offsetPx}px)`;
-                                                    }
-                                                }
-                                            }
-
                                             const left = localZoom > 0 && waveformPixelWidth > 0
                                                 ? seg.startPct * waveformPixelWidth
                                                 : `${seg.startPct * 100}%`;
                                             const width = localZoom > 0 && waveformPixelWidth > 0
                                                 ? (seg.endPct - seg.startPct) * waveformPixelWidth
                                                 : `${(seg.endPct - seg.startPct) * 100}%`;
-
-                                            // Spring easing: slight overshoot makes the slide feel physical
-                                            const springEase = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
-
                                             return (
-                                            <div
-                                                key={`hl-${seg.id}`}
-                                                className={`absolute top-0 bottom-0 pointer-events-auto rounded-sm ${!seg.isDeleted ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : ''} ${isDragging ? 'z-50' : 'z-[3]'} ${
-                                                    isDragging
-                                                        ? 'border-2 border-orange-400'
-                                                        : isActive && !seg.isDeleted && !seg.isMuted
-                                                            ? 'border-2 border-orange-400/80'
-                                                            : !seg.isDeleted && !seg.isMuted
-                                                                ? 'border-2 border-white/50'
-                                                                : ''
-                                                } ${seg.isDeleted ? 'bg-base-900/95 border-y-2 border-dashed border-base-600 shadow-[inset_0_0_20px_rgba(0,0,0,0.5)]' : seg.isMuted ? 'bg-black/60 grayscale backdrop-brightness-50' : ''}`}
-                                                style={{
-                                                    left,
-                                                    width,
-                                                    transform: isDragging
-                                                        ? `translateX(${draggedSegmentState.dx}px) translateY(-6px) scaleY(1.06)`
-                                                        : dragPreviewOrder
-                                                            ? `${previewTranslate} scaleY(0.94)`
-                                                            : previewTranslate,
-                                                    transition: isDragging
-                                                        ? 'none'
-                                                        : dragPreviewOrder
-                                                            ? `transform 0.22s ${springEase}`
-                                                            : `transform 0.22s ${springEase}`,
-                                                    opacity: isDragging ? 0.92 : (dragPreviewOrder ? 0.45 : 1),
-                                                    boxShadow: isDragging
-                                                        ? '0 0 0 1px rgba(251,146,60,0.6), 0 0 18px 3px rgba(251,146,60,0.25), 0 14px 32px rgba(0,0,0,0.65)'
-                                                        : undefined,
-                                                    transformOrigin: 'center center',
-                                                    willChange: dragPreviewOrder ? 'transform, opacity' : undefined,
-                                                }}
-                                                onMouseDown={(e) => handleSegmentOverlayMouseDown(e, seg)}
-                                            />
+                                                <div
+                                                    key={`hl-${seg.id}`}
+                                                    className={`absolute top-0 bottom-0 pointer-events-auto rounded-sm z-[3]
+                                                        ${seg.isDeleted ? '' : 'cursor-pointer'}
+                                                        ${isActive && !seg.isDeleted && !seg.isMuted ? 'border-2 border-orange-400/80'
+                                                            : !seg.isDeleted && !seg.isMuted ? 'border border-white/20'
+                                                            : ''}
+                                                        ${seg.isDeleted ? 'bg-base-900/95 border-y-2 border-dashed border-base-600 shadow-[inset_0_0_20px_rgba(0,0,0,0.5)]'
+                                                            : seg.isMuted ? 'bg-black/60 grayscale backdrop-brightness-50'
+                                                            : ''}`}
+                                                    style={{ left, width }}
+                                                    onMouseDown={(e) => handleSegmentOverlayMouseDown(e, seg)}
+                                                />
                                             );
                                         })}
                                     </div>
                                 </div>
+
+                                {/* Segment strip — INSIDE the scroll container so it moves with the waveform at any zoom level.
+                                    Width matches the inner canvas width exactly. */}
+                                {audioUrl && segments.length > 0 && (
+                                    <div className="flex items-stretch border-t border-base-700/50 bg-[#0a0b10] shrink-0"
+                                        style={{ width: localZoom > 0 && waveformPixelWidth > 0 ? waveformPixelWidth : '100%', minWidth: '100%', height: 32 }}>
+                                        {segments.map((seg, idx) => {
+                                            const isActive = seg.id === activeSegmentId;
+                                            const canLeft  = idx > 0 && segments.length > 1;
+                                            const canRight = idx < segments.length - 1;
+                                            const blockW   = localZoom > 0 && waveformPixelWidth > 0
+                                                ? `${(seg.endPct - seg.startPct) * waveformPixelWidth}px`
+                                                : `${(seg.endPct - seg.startPct) * 100}%`;
+                                            return (
+                                                <div
+                                                    key={`strip-${seg.id}`}
+                                                    className={`relative flex items-center justify-center select-none group
+                                                        border-r border-base-700/30 last:border-r-0 overflow-hidden transition-colors shrink-0
+                                                        ${seg.isDeleted ? 'opacity-20 cursor-default' : 'cursor-pointer'}
+                                                        ${seg.isMuted ? 'opacity-40' : ''}
+                                                        ${isActive && !seg.isDeleted ? 'bg-orange-500/15' : 'hover:bg-base-800/60'}`}
+                                                    style={{ width: blockW, minWidth: 24 }}
+                                                    onClick={(e) => { e.stopPropagation(); if (!seg.isDeleted) activateSegmentRef.current?.(seg.id); }}
+                                                    title={`Segment ${idx + 1}${seg.isMuted ? ' (muted)' : ''}${seg.isDeleted ? ' (deleted)' : ''}`}
+                                                >
+                                                    {canLeft && (
+                                                        <button
+                                                            onMouseDown={(e) => e.stopPropagation()}
+                                                            onClick={(e) => { e.stopPropagation(); handleSwapSegment(seg.id, 'left'); }}
+                                                            className="absolute left-0 top-0 bottom-0 px-1 flex items-center opacity-0 group-hover:opacity-100 transition-opacity bg-gradient-to-r from-base-700/80 to-transparent text-base-200 hover:text-white text-sm font-bold z-10"
+                                                            title="Move segment left"
+                                                        >‹</button>
+                                                    )}
+                                                    <span className={`text-[11px] font-mono font-bold leading-none z-[1] pointer-events-none ${isActive && !seg.isDeleted ? 'text-orange-300' : 'text-base-400'}`}>
+                                                        {seg.isDeleted ? '✕' : seg.isMuted ? `${idx + 1}M` : idx + 1}
+                                                    </span>
+                                                    {canRight && (
+                                                        <button
+                                                            onMouseDown={(e) => e.stopPropagation()}
+                                                            onClick={(e) => { e.stopPropagation(); handleSwapSegment(seg.id, 'right'); }}
+                                                            className="absolute right-0 top-0 bottom-0 px-1 flex items-center opacity-0 group-hover:opacity-100 transition-opacity bg-gradient-to-l from-base-700/80 to-transparent text-base-200 hover:text-white text-sm font-bold z-10"
+                                                            title="Move segment right"
+                                                        >›</button>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -2081,7 +2088,7 @@ export default function TrackCard({
                                                         onBlur={(e) => {
                                                             e.stopPropagation();
                                                             const targetBpm = parseFloat(e.target.value);
-                                                            const originalBpm = parseFloat(bpm); // always the original analyzed BPM
+                                                            const originalBpm = originalBpmRef.current ?? parseFloat(bpm);
                                                             if (!isNaN(targetBpm) && originalBpm > 0) {
                                                                 const newSpeed = Math.min(SPEED_MAX, Math.max(SPEED_MIN, targetBpm / originalBpm));
                                                                 setSpeedWithSync(newSpeed);
