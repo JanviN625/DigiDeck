@@ -26,7 +26,7 @@ module.exports = async (req, res) => {
 
     try {
         const response = await client.messages.create({
-            model: 'claude-haiku-4-5',
+            model: 'claude-sonnet-4-6',
             max_tokens: 1024,
             system: systemPrompt || 'You are a DJ assistant for DigiDeck, a music mashup studio.',
             messages: messages.slice(-20).map(({ role, content }) => ({ role, content })),

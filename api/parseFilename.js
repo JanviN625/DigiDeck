@@ -16,7 +16,7 @@ module.exports = async (req, res) => {
 
     try {
         const response = await client.messages.create({
-            model: 'claude-haiku-4-5',
+            model: 'claude-sonnet-4-6',
             max_tokens: 256,
             system: `You are a music metadata parser. Given a raw audio filename (without extension), extract the song title and artist. Handle: binary-encoded filenames (decode binary bytes to ASCII then parse), non-Latin scripts, "Artist - Title" patterns, or completely opaque names. Respond ONLY with valid JSON: {"title":"...","artist":"..."}. Use null for fields you cannot determine with confidence.`,
             messages: [{ role: 'user', content: `Filename: ${filename}` }],
