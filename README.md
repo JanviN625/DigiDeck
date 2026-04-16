@@ -1,6 +1,6 @@
 # DigiDeck — AI-Enhanced Music Mashup Studio
 
-**License:** AGPL-3.0 | **Stack:** React 19 · Firebase · Vercel · Anthropic claude-haiku-4-5 · WaveSurfer.js · Essentia.js · SoundTouch.js · Spotify API · AudD API
+**License:** AGPL-3.0 | **Stack:** React 19 · Firebase · Vercel · Anthropic claude-sonnet-4-6 · WaveSurfer.js · Essentia.js · SoundTouch.js · Spotify API · AudD API
 
 ---
 
@@ -31,7 +31,7 @@ No audio is stored in the cloud — only URLs and metadata. Firebase handles aut
 AI was used as an active development partner in three phases:
 
 1. **Plan first.** Before any significant feature, a spec was written in an external LLM session covering what to build, which files to touch, and what could go wrong. The spec was refined until precise enough to act on.
-2. **Implement with IDE-integrated tools.** Claude Haiku 4.5 (Claude Code) handled logic-heavy work — auth, state, tests, CI/CD, and the AI panel. Gemini 3.1 Low (Antigravity IDE) handled layout; Antigravity can control the browser directly, so it could visually verify UI changes against the design doc.
+2. **Implement with IDE-integrated tools.** Claude Sonnet 4.6 (Claude Code) handled logic-heavy work — auth, state, tests, CI/CD, and the AI panel. Gemini 3.1 Low (Antigravity IDE) handled layout; Antigravity can control the browser directly, so it could visually verify UI changes against the design doc.
 3. **Refine conversationally.** Follow-ups corrected mistakes the LLM introduced and resolved design decisions (component choices, Firestore rule scope, storage strategy).
 
 ### 2.2 AI Features in the Product
