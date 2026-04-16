@@ -1,4 +1,4 @@
-# DigiDeck — AI-Enhanced Music Mashup Studio
+# DigiDeck — AI-Enhanced Music Mashup DJ Studio
 
 **License:** AGPL-3.0 | **Stack:** React 19 · Firebase · Vercel · Anthropic claude-sonnet-4-6 · WaveSurfer.js · Essentia.js · SoundTouch.js · Spotify API · AudD API
 
