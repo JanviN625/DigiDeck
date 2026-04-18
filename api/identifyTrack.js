@@ -15,7 +15,7 @@ module.exports = async (req, res) => {
         if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error();
         const hostname = parsed.hostname.toLowerCase();
         if (hostname === 'localhost' || hostname.startsWith('127.') || hostname.startsWith('192.168.') || hostname.startsWith('10.') || hostname === '0.0.0.0' || hostname.endsWith('.local'))
-            throw new Error();
+            return res.status(200).json({ result: null });
     } catch {
         return res.status(400).json({ error: 'Invalid audioUrl' });
     }

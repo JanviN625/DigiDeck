@@ -178,8 +178,10 @@ const setupMocks = (extraTracks = [], settingsOverrides = {}) => {
     useMix.mockReturnValue({
         tracks: [{ id: 'track_1', title: 'My Track' }, ...extraTracks],
         handleUpdateTrack: mockHandleUpdateTrack,
+        handleUpdateTrackDuration: jest.fn(),
         universalIsPlaying: false,
         masterStopSignal: 0,
+        masterTimeRef: { current: 0 },
     });
 };
 
@@ -201,6 +203,8 @@ beforeEach(() => {
     global.fetch = jest.fn().mockReturnValue(new Promise(() => {}));
     global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
     global.URL.revokeObjectURL = jest.fn();
+    const { analyzeAudioBuffer } = require('../audio/essentiaAnalyzer');
+    analyzeAudioBuffer.mockResolvedValue({ bpm: 120, key: 'C', scale: 'major', beatPositions: [] });
     global.ResizeObserver = class ResizeObserver {
         observe() {}
         unobserve() {}
@@ -942,7 +946,7 @@ describe('TrackCard — waveform', () => { // [FR-026]
         const { container } = render(<TrackCard {...defaultProps} audioUrl="blob:mock" />);
         // WaveSurfer renders into the absolute-inset div inside this scroll viewport
         // eslint-disable-next-line testing-library/no-container, testing-library/no-node-access
-        expect(container.querySelector('.scrollbar-hide')).toBeInTheDocument();
+        expect(container.querySelector('.overflow-x-hidden')).toBeInTheDocument();
     });
 
     it('waveform scroll container is not rendered without audioUrl', () => {

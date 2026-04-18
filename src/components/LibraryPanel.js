@@ -5,7 +5,7 @@ import { useSpotify, useMix, useSpotifyConnect } from '../spotify/appContext';
 import { readId3Tags, spotifyConfirmMatch, buildSpotifyQuery } from '../utils/helpers';
 import PlaylistModal from './PlaylistModal';
 import { auth, db, storage } from '../firebase/firebaseConfig';
-import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { onAuthStateChanged } from 'firebase/auth';
 
@@ -15,8 +15,7 @@ const SpotifyIcon = () => (
     </svg>
 );
 
-export default function LibraryPanel() {
-    const [isCollapsed, setIsCollapsed] = useState(false);
+export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
     const { getUserPlaylists, searchSpotify, getSpotifyTrack } = useSpotify();
     const { handleAddTrack, tracks, handleUpdateTrack } = useMix();
     const { isSpotifyConnected, connectSpotify, disconnectSpotify, isConnecting } = useSpotifyConnect();
@@ -96,6 +95,9 @@ export default function LibraryPanel() {
         if (isSpotifyConnected) enrichLocalTracks();
     }, [isSpotifyConnected, enrichLocalTracks]);
 
+    // Subscribe to the user's global uploads collection.
+    // Files are shared across all projects — the workspace (tracks array) is
+    // what's project-specific, not the upload library itself.
     useEffect(() => {
         if (!currentUser) {
             setUserUploads([]);
@@ -103,17 +105,17 @@ export default function LibraryPanel() {
         }
 
         const q = query(
-            collection(db, `users/${currentUser.uid}/uploads`),
+            collection(db, 'users', currentUser.uid, 'uploads'),
             orderBy('createdAt', 'desc')
         );
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            const tracks = [];
+            const uploads = [];
             snapshot.forEach((doc) => {
-                tracks.push({ id: doc.id, ...doc.data() });
+                uploads.push({ id: doc.id, ...doc.data() });
             });
-            setUserUploads(tracks);
-        }, (error) => {
+            setUserUploads(uploads);
+        }, () => {
             // Expected on logout
         });
 
@@ -132,7 +134,7 @@ export default function LibraryPanel() {
             // 1. Read ID3 tags before uploading — best-effort, never blocks the upload
             const { title: id3Title, artist: id3Artist, albumArtBlob } = await readId3Tags(file);
 
-            // 2. Upload audio
+            // 2. Upload audio to the user's global uploads folder
             const storagePath = `uploads/${currentUser.uid}/${timestamp}_${file.name}`;
             const storageRef = ref(storage, storagePath);
             await uploadBytes(storageRef, file);
@@ -190,12 +192,18 @@ export default function LibraryPanel() {
             if (resolvedSpotifyTrackId) docData.spotifyTrackId = resolvedSpotifyTrackId;
             
             try {
-                await addDoc(collection(db, `users/${currentUser.uid}/uploads`), docData);
+                await addDoc(
+                    collection(db, 'users', currentUser.uid, 'uploads'),
+                    docData
+                );
             } catch (firestoreError) {
                 // Rollback storage blobs if DB write fails
                 try { await deleteObject(storageRef); } catch (e) {}
                 if (albumArtBlob) {
-                    try { const coverRef = ref(storage, `uploads/${currentUser.uid}/${timestamp}_cover`); await deleteObject(coverRef); } catch (e) {}
+                    try {
+                        const coverRef = ref(storage, `uploads/${currentUser.uid}/${timestamp}_cover`);
+                        await deleteObject(coverRef);
+                    } catch (e) {}
                 }
                 throw new Error("Metadata save failed. Upload rolled back.");
             }
@@ -229,8 +237,8 @@ export default function LibraryPanel() {
             // Delete from storage
             const storageRef = ref(storage, upload.storagePath);
             await deleteObject(storageRef);
-            // Delete from firestore
-            await deleteDoc(doc(db, `users/${currentUser.uid}/uploads`, upload.id));
+            // Delete from global uploads collection
+            await deleteDoc(doc(db, 'users', currentUser.uid, 'uploads', upload.id));
         } catch (err) {
             setDeleteError(err.message || 'Failed to delete. Please try again.');
         }
@@ -254,7 +262,36 @@ export default function LibraryPanel() {
                     // Field-filtered search for precision when title (and optionally artist) are known
                     const spQuery = buildSpotifyQuery(upload.title, upload.artistName);
                     const results = await searchSpotify(spQuery, ['track'], 5);
-                    const match = spotifyConfirmMatch(upload.title, results?.tracks?.items);
+                    let match = spotifyConfirmMatch(upload.title, results?.tracks?.items);
+                    if (!match && results?.tracks?.items?.length) {
+                        try {
+                            const llmRes = await fetch('/api/findSpotifyTrack', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    title: upload.title,
+                                    artist: upload.artistName || null,
+                                    candidates: results.tracks.items.slice(0, 5).map(t => ({
+                                        id: t.id,
+                                        name: t.name,
+                                        artists: t.artists,
+                                        album: { images: t.album?.images },
+                                    })),
+                                }),
+                            });
+                            if (llmRes.ok) {
+                                const { result } = await llmRes.json();
+                                if (result?.index != null) {
+                                    match = results.tracks.items[result.index];
+                                    // Persist resolved Spotify ID so future adds skip this lookup
+                                    if (upload.id && match?.id) {
+                                        updateDoc(doc(db, 'users', currentUser.uid, 'uploads', upload.id),
+                                            { spotifyTrackId: match.id }).catch(() => {});
+                                    }
+                                }
+                            }
+                        } catch { /* best-effort */ }
+                    }
                     if (match) {
                         artistName = match.artists?.map(a => a.name).join(', ') || artistName;
                         albumArt   = match.album?.images?.[0]?.url || albumArt;

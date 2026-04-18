@@ -259,12 +259,11 @@ function MarkdownMessage({ content }) {
 
 // --- AIPanel -----------------------------------------------------------------
 
-export default function AIPanel() {
+export default function AIPanel({ isCollapsed, setIsCollapsed }) {
     const { tracks, getLiveTracks } = useMix();
     const { user } = useFirebaseAuth();
     const displayName = user?.displayName || user?.email || 'User';
     const avatarSrc   = user?.photoURL || null;
-    const [isCollapsed, setIsCollapsed] = useState(false);
     const [panelWidth, setPanelWidth]   = useState(MIN_WIDTH);
     const [input, setInput]             = useState('');
     const [loading, setLoading]         = useState(false);

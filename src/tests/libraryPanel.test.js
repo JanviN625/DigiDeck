@@ -156,7 +156,11 @@ describe('LibraryPanel — initial rendering', () => {
 
 describe('LibraryPanel — collapse and expand', () => {
     it('collapses when the collapse button is clicked', () => {
-        render(<LibraryPanel />);
+        function LibraryWithState() {
+            const [isCollapsed, setIsCollapsed] = React.useState(false);
+            return <LibraryPanel isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} />;
+        }
+        render(<LibraryWithState />);
         fireEvent.click(screen.getByTitle('Collapse Library'));
         // After collapsing, "Library" text heading is gone and expand button appears
         expect(screen.queryByTitle('Collapse Library')).not.toBeInTheDocument();
@@ -164,7 +168,11 @@ describe('LibraryPanel — collapse and expand', () => {
     });
 
     it('expands again when the expand button is clicked', () => {
-        render(<LibraryPanel />);
+        function LibraryWithState() {
+            const [isCollapsed, setIsCollapsed] = React.useState(false);
+            return <LibraryPanel isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} />;
+        }
+        render(<LibraryWithState />);
         fireEvent.click(screen.getByTitle('Collapse Library'));
         fireEvent.click(screen.getByTitle('Expand Library'));
         expect(screen.getByTitle('Collapse Library')).toBeInTheDocument();
@@ -224,6 +232,7 @@ describe('LibraryPanel — upload section', () => { // [FR-016]
         fireEvent.click(screen.getByTitle('Add to Workspace'));
         await waitFor(() => expect(mockHandleAddTrack).toHaveBeenCalledTimes(1));
     });
+
 });
 
 // ─── Spotify section ──────────────────────────────────────────────────────────

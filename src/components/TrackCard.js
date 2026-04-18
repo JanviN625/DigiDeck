@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, EyeOff, Move, Copy, Trash2, RotateCcw, AlertTriangle, X, Plus, Power } from 'lucide-react';
+import { Pencil, ChevronDown, ChevronUp, Play, Pause, Volume2, VolumeX, Eye, EyeOff, Move, Copy, Trash2, RotateCcw, AlertTriangle, X, Plus, Power, ZoomIn, Loader2 } from 'lucide-react';
 import { Slider } from '@heroui/react';
-import { getDynamicInputWidth } from '../utils/helpers';
+import { getDynamicInputWidth, spotifyConfirmMatch, buildSpotifyQuery } from '../utils/helpers';
+import { searchSpotify, isLoggedIn } from '../spotify/spotifyApi';
 import { EFFECT_CONFIGS } from '../utils/trackConfig';
 import { useAudioEngine } from '../audio/useAudioEngine';
 import AudioEngineService, { audioBufferToWAV } from '../audio/AudioEngine';
@@ -143,6 +144,7 @@ export default function TrackCard({
     const [isExpanded, setIsExpanded] = useState(initiallyExpanded);
     const [trackName, setTrackName] = useState(title);
     const [isEditing, setIsEditing] = useState(false);
+    const [isReidentifying, setIsReidentifying] = useState(false);
     const [missingDismissed, setMissingDismissed] = useState(false);
     const [isSettingsExpanded, setIsSettingsExpanded] = useState(false);
 
@@ -164,16 +166,21 @@ export default function TrackCard({
     const [audioDuration, setAudioDuration] = useState(0);
     const [displayTimeSec, setDisplayTimeSec] = useState(0);
     const [containerWidth, setContainerWidth] = useState(0);
-    // Per-track zoom — must be declared before waveformPixelWidth (used below).
-    // Syncs with globalZoom when the global slider moves; per-track +/- adjusts independently from there.
+    // Per-track zoom — must be declared before clipWidthPct (used below).
+    // Syncs with globalZoom when the global slider moves; per-track scroll-wheel adjusts independently.
     const [localZoom, setLocalZoom] = useState(globalZoom);
     useEffect(() => { setLocalZoom(globalZoom); }, [globalZoom]);
-    // Wall-clock duration at current speed. Slower speed → waveform stretches wider so beat markers align.
+    // Wall-clock duration at current speed. Slower speed → beat markers spread wider to align with master.
     const effectiveDuration = audioDuration > 0 ? audioDuration / Math.max(0.1, parseFloat(speed)) : 0;
-    // Derived synchronously — no state lag when zoom changes.
-    // zoom > 0: WaveSurfer pxPerSec = zoom * 2 / speed, so total canvas width = zoom * 2 * effectiveDuration.
-    // zoom = 0: WaveSurfer auto-fits to container; containerWidth is measured via rAF.
-    const waveformPixelWidth = localZoom > 0 && effectiveDuration > 0 ? localZoom * 2 * effectiveDuration : containerWidth;
+    const clipProportion = masterDuration > 0 && effectiveDuration > 0
+        ? Math.min(1, effectiveDuration / masterDuration)
+        : 1;
+    // DAW-style zoom: exponential scale so low values stay gentle and high values reach deep detail.
+    // Slider range 0–400. Ticks 1–5 span 1× → ~2.7× → ~7× → ~19× → 50× (beat-level visible ~150+).
+    const zoomMultiplier = Math.pow(50, localZoom / 400);
+    // waveformPixelWidth = actual rendered pixel width of the canvas (containerWidth, measured via ResizeObserver).
+    // Used for beat-marker visibility threshold and effect-visual positioning.
+    const waveformPixelWidth = containerWidth;
     const [effects, setEffects] = useState([]);
     const [showAddEffectMenu, setShowAddEffectMenu] = useState(false);
     const [isDraggable, setIsDraggable] = useState(false);
@@ -281,19 +288,22 @@ export default function TrackCard({
 
     // Master BPM beat grid — evenly spaced at 60/masterBpm intervals, phase-locked to the master
     // timeline clock by accounting for this track's offsetSec. All tracks share the same phase.
+    // Values are in wall-clock (playback) time; rendered only as a fallback when Essentia beats
+    // are unavailable. Compare against effectiveDuration (wall-clock) not audioDuration (buffer).
     const masterBeatGrid = useMemo(() => {
         if (!masterBpm || masterBpm <= 0 || !audioDuration) return [];
         const beatSec = 60 / masterBpm;
         const offset = offsetSec || 0;
         const firstBeatIdx = Math.ceil(offset / beatSec);
+        const trackWallDuration = effectiveDuration || audioDuration;
         const grid = [];
         for (let i = firstBeatIdx; ; i++) {
             const beatInTrack = i * beatSec - offset;
-            if (beatInTrack >= audioDuration) break;
+            if (beatInTrack >= trackWallDuration) break;
             if (beatInTrack >= 0) grid.push(beatInTrack);
         }
         return grid.length > 500 ? [] : grid; // safety cap: avoid rendering 500+ lines
-    }, [masterBpm, audioDuration, offsetSec]);
+    }, [masterBpm, audioDuration, effectiveDuration, offsetSec]);
 
     const masterBeatGridRef = useRef([]);
     useEffect(() => { masterBeatGridRef.current = masterBeatGrid; }, [masterBeatGrid]);
@@ -319,6 +329,64 @@ export default function TrackCard({
     useEffect(() => {
         setTrackName(title);
     }, [title]);
+
+    // Rename → Spotify re-identification for local tracks.
+    // Fires only on the true→false transition of isEditing (rename committed).
+    const prevIsEditingRef = useRef(false);
+    useEffect(() => {
+        const wasEditing = prevIsEditingRef.current;
+        prevIsEditingRef.current = isEditing;
+        if (!wasEditing || isEditing) return; // only on commit
+
+        const trackData = tracks.find(t => t.id === trackId);
+        if (!trackData?.isLocal) return;
+        if (!isLoggedIn()) return;
+
+        const newTitle = trackName.trim();
+        if (!newTitle || newTitle === title) return; // name unchanged
+
+        const artistName = trackData.artistName || null;
+        const resolvedBpm = typeof trackData.bpm === 'number' ? trackData.bpm : null;
+        const resolvedKey = typeof trackData.trackKey === 'string' && trackData.trackKey !== '[key]' ? trackData.trackKey : null;
+
+        setIsReidentifying(true);
+        (async () => {
+            try {
+                const query = buildSpotifyQuery(newTitle, artistName);
+                const results = await searchSpotify(query, ['track'], 5);
+                let match = spotifyConfirmMatch(newTitle, results?.tracks?.items);
+                if (!match && results?.tracks?.items?.length) {
+                    const body = {
+                        title: newTitle,
+                        artist: artistName,
+                        candidates: results.tracks.items.slice(0, 5).map(t => ({
+                            id: t.id, name: t.name, artists: t.artists,
+                            album: { images: t.album?.images },
+                        })),
+                    };
+                    if (resolvedBpm !== null) body.bpm = resolvedBpm;
+                    if (resolvedKey !== null) body.trackKey = resolvedKey;
+                    const llmRes = await fetch('/api/findSpotifyTrack', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body),
+                    });
+                    if (llmRes.ok) {
+                        const { result } = await llmRes.json();
+                        if (result?.index != null) match = results.tracks.items[result.index];
+                    }
+                }
+                if (match) {
+                    handleUpdateTrack(trackId, {
+                        artistName: match.artists?.map(a => a.name).join(', ') || artistName,
+                        albumArt: match.album?.images?.[0]?.url || null,
+                    }, true);
+                }
+            } catch { /* best-effort */ }
+            finally { setIsReidentifying(false); }
+        })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isEditing]);
 
     // Audio initialisation — single network fetch shared between AudioEngine and WaveSurfer.
     // The ArrayBuffer is fetched once; a Blob URL is created for WaveSurfer before
@@ -396,34 +464,17 @@ export default function TrackCard({
                     barWidth: 2,
                     barRadius: 1,
                     height: 'auto',
+                    interact: false,
                 });
 
-                // 'interaction' fires only on user-initiated seek (click or drag),
-                // never on programmatic ws.seekTo() calls from the playhead sync loop.
                 ws.on('ready', () => {
                     waveformReadyRef.current = true;
                     const dur = ws.getDuration();
                     durationRef.current = dur;
                     setAudioDuration(dur);
                     handleUpdateTrackDuration(trackId, dur);
-                    if (localZoom > 0) ws.zoom(localZoom * 2 / Math.max(0.1, parseFloat(speed)));
-                });
-
-                ws.on('interaction', (newTime) => {
-                    const absTime = newTime + offsetSec;
-                    handleSeekMaster(absTime);
-
-                    if (durationRef.current > 0) {
-                        currentTimePctRef.current = newTime / durationRef.current;
-                        // Detect which segment the user clicked and activate it
-                        const pct = newTime / durationRef.current;
-                        const clickedSeg = segmentsRef.current?.find(s => pct >= s.startPct && pct < s.endPct);
-                        if (clickedSeg && clickedSeg.id !== activeSegmentIdRef.current) {
-                            activateSegmentRef.current?.(clickedSeg.id);
-                        }
-                    }
-                    setDisplayTimeSec(newTime);
-                    seek(newTime);
+                    // Always auto-fit — container width (driven by clipWidthPct) is the zoom
+                    ws.zoom(0);
                 });
 
                 wavesurferRef.current = ws;
@@ -528,49 +579,42 @@ export default function TrackCard({
         });
     }, [eqLow, eqMid, eqHigh, eqKills, setEQ]);
 
-    // Waveform Zoom — ref guard ensures audio is loaded before calling zoom().
-    // Initial zoom is applied inside the 'ready' handler; this effect handles
-    // subsequent slider changes only.
-    // After zoom(), we compute the scroll position that centers the playhead in the
-    // visible container, then apply it to both the WaveSurfer scroll element and the
-    // overlay container so all overlays remain pinned to their correct time positions.
+    // Re-fit WaveSurfer immediately when zoom or speed changes (before ResizeObserver fires).
     useEffect(() => {
         if (!waveformReadyRef.current || !wavesurferRef.current) return;
-        wavesurferRef.current.zoom(localZoom > 0 ? localZoom * 2 / Math.max(0.1, parseFloat(speed)) : 0);
-        requestAnimationFrame(() => {
-            if (!scrollContainerRef.current) return;
-            if (localZoom > 0 && waveformRef.current) {
-                // Center the view on the current playhead position.
-                // totalWidth = pxPerSec * duration (same formula as waveformPixelWidth).
-                const totalWidth  = localZoom * 2 * durationRef.current;
-                const containerW  = scrollContainerRef.current.clientWidth;
-                const playheadPx  = currentTimePctRef.current * totalWidth;
-                const scrollTo    = Math.max(0, Math.min(playheadPx - containerW / 2, totalWidth - containerW));
-                scrollContainerRef.current.scrollLeft = scrollTo;
-            } else {
-                // zoom = 0: full track fits in container, no scroll needed.
-                scrollContainerRef.current.scrollLeft = 0;
-            }
-        });
+        wavesurferRef.current.zoom(0);
     }, [localZoom, speed]);
 
-    // Re-fit the waveform whenever the clip physically resizes in the DOM.
-    // containerWidth is set by the ResizeObserver on waveformRef, which fires AFTER the browser
-    // has computed the new layout — so WaveSurfer reads the correct clientWidth when zoom(0) runs.
-    // This is more reliable than reacting to masterDuration alone (which fires before layout).
+    // Re-fit the waveform whenever the container physically resizes (zoom change, masterDuration change,
+    // or panel expand). ResizeObserver fires after the browser has computed the new layout — so WaveSurfer
+    // reads the correct clientWidth when zoom(0) runs. Active at all zoom levels (clip width changes at any zoom).
     useEffect(() => {
-        if (!wavesurferRef.current || !waveformReadyRef.current || localZoom !== 0 || containerWidth <= 0) return;
+        if (!wavesurferRef.current || !waveformReadyRef.current || containerWidth <= 0) return;
         wavesurferRef.current.zoom(0);
-    }, [containerWidth, localZoom]);
+    }, [containerWidth]);
 
-    // Belt-and-suspenders: also trigger on masterDuration change using rAF to wait for layout paint.
+    // Belt-and-suspenders: trigger on masterDuration / effectiveDuration changes using rAF so layout paints first.
     useEffect(() => {
-        if (!wavesurferRef.current || !waveformReadyRef.current || localZoom !== 0) return;
+        if (!wavesurferRef.current || !waveformReadyRef.current) return;
         const id = requestAnimationFrame(() => {
             if (wavesurferRef.current && waveformReadyRef.current) wavesurferRef.current.zoom(0);
         });
         return () => cancelAnimationFrame(id);
-    }, [masterDuration, effectiveDuration, localZoom]);
+    }, [masterDuration, effectiveDuration]);
+
+    // Scroll viewport to centre the playhead whenever zoom level changes.
+    useEffect(() => {
+        const scrollEl = scrollContainerRef.current;
+        if (!scrollEl) return;
+        if (zoomMultiplier <= 1) { scrollEl.scrollLeft = 0; return; }
+        const laneWidth = scrollEl.clientWidth;
+        if (!laneWidth) return;
+        const clipLeftPx  = masterDuration > 0 ? (offsetSec / masterDuration) * zoomMultiplier * laneWidth : 0;
+        const clipWidthPx = clipProportion * zoomMultiplier * laneWidth;
+        const playheadPx  = clipLeftPx + (currentTimePctRef.current || 0) * clipWidthPx;
+        scrollEl.scrollLeft = Math.max(0, playheadPx - laneWidth / 2);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [localZoom]);
 
     // Scroll-wheel zoom — must be non-passive so preventDefault() actually stops page scroll.
     // RAF-debounced so rapid scroll events are coalesced into one zoom call per frame.
@@ -581,13 +625,13 @@ export default function TrackCard({
         let pending = 0;
         const onWheel = (e) => {
             e.preventDefault();
-            pending += e.deltaY < 0 ? 5 : -5;
+            pending += e.deltaY < 0 ? 20 : -20;
             if (rafId) return;
             rafId = requestAnimationFrame(() => {
                 rafId = null;
                 const delta = pending;
                 pending = 0;
-                setLocalZoom(z => Math.min(100, Math.max(0, z + delta)));
+                setLocalZoom(z => Math.min(400, Math.max(0, z + delta)));
             });
         };
         el.addEventListener('wheel', onWheel, { passive: false });
@@ -598,20 +642,21 @@ export default function TrackCard({
     }, [audioUrl, isExpanded]); // re-attach when audio loads or card expands
 
     // Measure container width dynamically using ResizeObserver.
-    // This handles zoom = 0 (auto-fit mode) and any flex shrinking if masterDuration extends.
+    // Active at all zoom levels — as zoom changes the clip container resizes, and we need
+    // containerWidth to stay accurate for beat-marker visibility and overlay positioning.
     useEffect(() => {
-        if (!waveformRef.current || globalZoom > 0) return;
-        
+        if (!waveformRef.current) return;
+
         const node = waveformRef.current;
         const observer = new ResizeObserver(entries => {
             for (let entry of entries) {
                 setContainerWidth(entry.contentRect.width);
             }
         });
-        
+
         observer.observe(node);
         return () => observer.disconnect();
-    }, [globalZoom]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Write a partial update to the currently active segment's stored config.
     // Uses activeSegmentIdRef (always current) to avoid stale closure in concurrent renders.
@@ -883,29 +928,37 @@ export default function TrackCard({
 
     // Click on a segment overlay — seek to the clicked position and activate that segment.
     // Reordering is handled by the segment strip below the waveform, not by dragging on the overlay.
+    //
+    // Position is calculated at mousedown time using waveformRef.getBoundingClientRect().left.
+    // getBoundingClientRect() is viewport-relative and already bakes in the current scrollLeft,
+    // so we don't need to read scrollLeft separately. This avoids a race where the RAF auto-scroll
+    // loop changes scrollLeft between mousedown and mouseup (causing a shifted seek position).
     const handleSegmentOverlayMouseDown = useCallback((e, seg) => {
         if (seg.isDeleted) return;
         e.stopPropagation();
-        const onUp = (upEvent) => {
-            document.removeEventListener('mouseup', onUp);
-            const containerEl = scrollContainerRef.current;
-            const containerRect = containerEl?.getBoundingClientRect();
-            if (!containerRect) return;
-            const totalWidth = containerEl.scrollWidth || containerRect.width || 1;
-            const clickX = upEvent.clientX - containerRect.left + (containerEl.scrollLeft || 0);
-            const pct = Math.max(0, Math.min(1, clickX / totalWidth));
-            const timeSec = pct * (audioDuration || 0);
-            seek(timeSec);
-            handleSeekMaster(timeSec + (offsetSec || 0));
-            if (durationRef.current > 0) {
-                const clickedSeg = segmentsRef.current?.find(s => pct >= s.startPct && pct < s.endPct);
-                if (clickedSeg) activateSegmentRef.current?.(clickedSeg.id);
-                currentTimePctRef.current = pct;
-                if (wavesurferRef.current) wavesurferRef.current.seekTo(pct);
-            }
-            setDisplayTimeSec(timeSec);
-        };
-        document.addEventListener('mouseup', onUp);
+
+        const waveformEl = waveformRef.current;
+        const scrollEl = scrollContainerRef.current;
+        if (!waveformEl || !scrollEl) return;
+
+        // waveformRef is absolute inset-0 inside the clip div. getBoundingClientRect() already
+        // accounts for current scroll position, so waveformRect.left is the correct viewport-relative
+        // origin and waveformRect.width is the actual rendered clip width (not the viewport width).
+        const waveformRect = waveformEl.getBoundingClientRect();
+        const totalWidth = waveformRect.width || 1;
+        const clickX = e.clientX - waveformRect.left;
+        const pct = Math.max(0, Math.min(1, clickX / totalWidth));
+        const timeSec = pct * (audioDuration || 0);
+
+        seek(timeSec);
+        handleSeekMaster(timeSec + (offsetSec || 0));
+        if (durationRef.current > 0) {
+            const clickedSeg = segmentsRef.current?.find(s => pct >= s.startPct && pct < s.endPct);
+            if (clickedSeg) activateSegmentRef.current?.(clickedSeg.id);
+            currentTimePctRef.current = pct;
+            if (wavesurferRef.current) wavesurferRef.current.seekTo(pct);
+        }
+        setDisplayTimeSec(timeSec);
     }, [audioDuration, offsetSec, seek, handleSeekMaster]);
 
     // Reorder segments — rebuilds the audio buffer in the new ID order.
@@ -1234,12 +1287,13 @@ export default function TrackCard({
             // Only persist the title if it's unique — don't overwrite good state with a duplicate
             ...(!isDuplicateName && { title: trackName.trim() }),
             initialVolume: volume,
-            initialZoom: globalZoom,
+            initialSpeed: speed,
+            initialZoom: localZoom,
             initiallyExpanded: isExpanded,
             initialSegments: segmentsRef.current,
         }, true); // TRUE: Skip generic tracker history stack pollution for visual layout syncs!
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [trackName, volume, globalZoom, isExpanded, segments, handleUpdateTrack, trackId]);
+    }, [trackName, volume, speed, localZoom, isExpanded, segments, handleUpdateTrack, trackId]);
 
     // Setup polling for playhead sync + fade-out trigger.
     // Position is read from SoundTouch's stSource.position (in samples) so it
@@ -1261,6 +1315,12 @@ export default function TrackCard({
                 const displayProportion = Math.min(1, audioPosSec / track.audioBuffer.duration);
                 currentTimePctRef.current = displayProportion;
                 wavesurferRef.current.seekTo(displayProportion);
+
+                // Keep master clock in sync with local play so global play resumes from here.
+                // Only when NOT universally playing — the master clock RAF owns masterTimeRef then.
+                if (!universalIsPlaying) {
+                    masterTimeRef.current = offsetSec + audioPosSec;
+                }
 
                 // Throttle timestamp display to ~10 fps to avoid excessive re-renders.
                 const now = performance.now();
@@ -1345,16 +1405,7 @@ export default function TrackCard({
                     }
                 }
 
-                // Programmatic Snap-to-Center Auto-scroll if playing off-screen
-                if (scrollContainerRef.current) {
-                    const scrollEl = scrollContainerRef.current;
-                    // Playhead position in absolute pixels on our custom width wrapper
-                    const pPx = (audioPosSec / track.audioBuffer.duration) * waveformPixelWidth;
-                    // Provide a nice 100px right-side margin before snapping
-                    if (pPx > scrollEl.scrollLeft + scrollEl.clientWidth - 100) {
-                        scrollEl.scrollLeft = Math.max(0, pPx - (scrollEl.clientWidth / 2));
-                    }
-                }
+                // No auto-scroll needed: the waveform always auto-fits within the clip (no horizontal overflow).
             }
             frameId = requestAnimationFrame(updatePlayhead);
         };
@@ -1368,9 +1419,9 @@ export default function TrackCard({
     // zoom, or duration change.
     const segmentEffectVisuals = useMemo(() => {
         if (!audioUrl || audioDuration <= 0) return null;
-        const px = localZoom > 0 && waveformPixelWidth > 0;
-        const toLeft  = (pct) => px ? `${pct * waveformPixelWidth}px` : `${pct * 100}%`;
-        const toWidth = (pct) => px ? `${pct * waveformPixelWidth}px` : `${pct * 100}%`;
+        // Canvas always fills clip via auto-fit — percentage positioning is always correct.
+        const toLeft  = (pct) => `${pct * 100}%`;
+        const toWidth = (pct) => `${pct * 100}%`;
 
         return segments.map(seg => {
             if (seg.isDeleted || seg.isMuted) return null;
@@ -1378,43 +1429,12 @@ export default function TrackCard({
             const segL = toLeft(seg.startPct);
             const segW = toWidth(seg.endPct - seg.startPct);
 
-            const fx      = seg.effects || [];
-            const volFx   = fx.find(e => e.type === 'volume'     && e.enabled);
-            const panFx   = fx.find(e => e.type === 'panner'     && e.enabled);
-            const filterFx = fx.find(e => e.type === 'filter'    && e.enabled);
-            const reverbFx = fx.find(e => e.type === 'reverb'    && e.enabled);
-            const delayFx  = fx.find(e => e.type === 'delay'     && e.enabled);
-            const compFx   = fx.find(e => e.type === 'compressor'&& e.enabled);
+            const fx    = seg.effects || [];
+            const volFx = fx.find(e => e.type === 'volume' && e.enabled);
 
             // Volume line — always visible; position encodes gain (0→bottom, 1.0→center, 2.0→top)
             const gain   = volFx ? (volFx.params?.gain ?? 1.0) : 1.0;
             const volTop = `${(1 - Math.max(0, Math.min(1, gain / 2.0))) * 100}%`;
-
-            // Speed tint — hidden at default (1.0)
-            const dSpd  = seg.speed - 1.0;
-            const spdOp = dSpd !== 0 ? Math.max(0.12, Math.min(0.30, Math.abs(dSpd) * 0.20)) : 0;
-            const spdBg = dSpd > 0 ? `rgba(251,146,60,${spdOp})` : `rgba(96,165,250,${spdOp})`;
-
-            // Pan gradient — hidden when pan === 0
-            const pan     = panFx ? (panFx.params?.pan ?? 0) : 0;
-            const panGrad = pan !== 0
-                ? pan < 0
-                    ? `linear-gradient(to right,rgba(236,72,153,${Math.min(0.45, Math.abs(pan)*0.5)}),transparent 65%)`
-                    : `linear-gradient(to left, rgba(236,72,153,${Math.min(0.45, Math.abs(pan)*0.5)}),transparent 65%)`
-                : null;
-
-            // Filter — hidden at defaults (highpass 300 Hz)
-            let filterGrad = null;
-            if (filterFx) {
-                const freq  = filterFx.params?.frequency  ?? 300;
-                const fType = filterFx.params?.filterType ?? 'highpass';
-                if (freq !== 300 || fType !== 'highpass') {
-                    const frac = Math.log10(Math.max(20, freq) / 20) / Math.log10(20000 / 20);
-                    filterGrad = fType === 'highpass'
-                        ? `linear-gradient(to right,rgba(34,197,94,0.30),transparent ${Math.min(75,frac*70+8)}%)`
-                        : `linear-gradient(to left, rgba(34,197,94,0.30),transparent ${Math.min(75,(1-frac)*70+8)}%)`;
-                }
-            }
 
             // EQ — hidden when all bands at 0 and no kills
             const eqBands = [
@@ -1423,28 +1443,6 @@ export default function TrackCard({
                 { v: seg.eqHigh, k: seg.eqKills?.high, label: 'High' },
             ];
             const hasEq = eqBands.some(b => b.k || b.v !== 0);
-
-            // Reverb — hidden at default mix (0.3)
-            const reverbMix  = reverbFx?.params?.mix ?? 0.3;
-            const reverbGrad = (reverbFx && reverbMix !== 0.3)
-                ? `linear-gradient(to top, rgba(129,140,248,${0.25 + reverbMix * 0.35}), transparent 40%)`
-                : null;
-
-            // Delay — hidden when all params at defaults
-            const delayMix  = delayFx?.params?.mix      ?? 0.5;
-            const delayTime = delayFx?.params?.time     ?? 0.25;
-            const delayFb   = delayFx?.params?.feedback ?? 0.3;
-            const delayGrad = (delayFx && (delayMix !== 0.5 || delayTime !== 0.25 || delayFb !== 0.3))
-                ? `linear-gradient(to top, rgba(34,211,238,${0.20 + delayMix * 0.30}), transparent 35%)`
-                : null;
-
-            // Compressor — hidden when all params at defaults
-            const compThresh = compFx?.params?.threshold ?? -24;
-            const compRatio  = compFx?.params?.ratio     ?? 4;
-            const compKnee   = compFx?.params?.knee      ?? 10;
-            const compGrad = (compFx && (compThresh !== -24 || compRatio !== 4 || compKnee !== 10))
-                ? `linear-gradient(to top, rgba(250,204,21,0.30), transparent 25%)`
-                : null;
 
             // Fades — hidden when 0
             const fiFrac = seg.fadeIn  > 0 ? Math.min(seg.fadeIn  / audioDuration, seg.endPct - seg.startPct) : 0;
@@ -1467,15 +1465,9 @@ export default function TrackCard({
                         </div>
                     )}
 
-                    {/* Segment-scoped overlays */}
+                    {/* Segment-scoped overlays — volume line and EQ bars only, no colour tints */}
                     <div className="absolute top-0 bottom-0 pointer-events-none overflow-hidden z-[4]"
                         style={{ left: segL, width: segW }}>
-                        {spdOp > 0       && <div className="absolute inset-0" style={{ backgroundColor: spdBg }} />}
-                        {panGrad         && <div className="absolute inset-0" style={{ background: panGrad }} />}
-                        {filterGrad      && <div className="absolute inset-0" style={{ background: filterGrad }} />}
-                        {reverbGrad      && <div className="absolute inset-0" style={{ background: reverbGrad }} />}
-                        {delayGrad       && <div className="absolute inset-0" style={{ background: delayGrad }} />}
-                        {compGrad        && <div className="absolute inset-0" style={{ background: compGrad }} />}
 
                         {/* Volume line — always visible */}
                         <div className="absolute left-0 right-0 pointer-events-none"
@@ -1497,7 +1489,7 @@ export default function TrackCard({
             );
         });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [segments, audioDuration, waveformPixelWidth, localZoom, audioUrl]);
+    }, [segments, audioDuration, audioUrl]);
 
     return (
         <div className="relative">
@@ -1549,6 +1541,9 @@ export default function TrackCard({
                         </button>
                         {isEditing && isDuplicateName && (
                             <span className="text-xs font-medium text-red-400 whitespace-nowrap truncate shrink-0">Name already in use</span>
+                        )}
+                        {isReidentifying && (
+                            <Loader2 size={13} className="animate-spin text-base-400 shrink-0" title="Finding on Spotify…" />
                         )}
 
                         {audioUrl && (
@@ -1679,7 +1674,16 @@ export default function TrackCard({
                         {/* Toggle Buttons */}
                         <div className="flex justify-between gap-1">
                             <button
-                                onClick={(e) => { e.stopPropagation(); setIsPlaying(!isPlaying); }}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (!isPlaying) {
+                                        // Sync master clock before the RAF loop starts so that
+                                        // pressing global play immediately after picks up this position.
+                                        const localSec = (currentTimePctRef.current || 0) * (durationRef.current || 0);
+                                        masterTimeRef.current = offsetSec + localSec;
+                                    }
+                                    setIsPlaying(!isPlaying);
+                                }}
                                 disabled={!isVisible || !audioUrl || isMissing}
                                 title={isMissing ? 'File missing from imports' : !audioUrl ? 'No preview available' : undefined}
                                 className={`flex-1 aspect-square rounded flex items-center justify-center transition-colors border ${!isVisible || !audioUrl || isMissing ? 'bg-base-900 text-base-700 border-base-800 cursor-not-allowed' : isPlaying ? 'bg-base-500 text-base-50 border-base-400' : 'bg-base-900 text-base-300 border-base-700 hover:text-base-50 hover:border-base-500'}`}
@@ -1794,28 +1798,34 @@ export default function TrackCard({
                         </div>
                     </div>
 
-                    {/* Right column (Timeline Lane) */}
+                    {/* Right column (Timeline Lane) — fixed-width TIMELINE reference. All clips share this same lane width.
+                         Shorter tracks occupy a proportional slice with trailing whitespace (DAW-style). */}
                     <div ref={laneRef} className="flex flex-col flex-1 min-w-0 bg-[#0F111A] border-l border-base-700/50 shadow-inner relative overflow-hidden">
-                        {/* The Actual Track Clip */}
-                        <div 
+                        {/* Scrollable viewport — wheel events change zoom (preventDefault stops browser scroll).
+                             scrollLeft is set programmatically to follow the playhead on zoom changes. */}
+                        <div
+                            ref={scrollContainerRef}
+                            className="absolute inset-0 overflow-x-hidden"
+                        >
+                        {/* Timeline content — zoomMultiplier × lane width. Clip is positioned within. */}
+                        <div
+                            className="h-full relative"
+                            style={{ width: `${zoomMultiplier * 100}%`, minWidth: '100%' }}
+                        >
+                        {/* Track clip — proportional slice of the timeline */}
+                        <div
                             className="absolute top-0 bottom-0 flex flex-col bg-base-900 border border-base-700 shadow-xl rounded overflow-hidden"
                             style={{
-                                width: masterDuration > 0 && effectiveDuration > 0
-                                    ? `${(effectiveDuration / masterDuration) * 100}%`
-                                    : '100%',
                                 left: masterDuration > 0 ? `${(offsetSec / masterDuration) * 100}%` : '0%',
+                                width: masterDuration > 0 ? `${clipProportion * 100}%` : '100%',
                                 transition: isDragged ? 'none' : 'left 0.1s ease-out'
                             }}
                         >
-                            {/* Consolidated Scroll Viewport — flex-col so the segment strip lives inside
-                                and scrolls with the waveform at any zoom level. */}
+                            {/* Inner canvas — fills the clip. WaveSurfer auto-fits to this width. */}
                             <div
-                                ref={scrollContainerRef}
-                                className="flex flex-col flex-1 min-w-full overflow-x-auto overflow-y-hidden scrollbar-hide bg-base-900"
+                                className="flex flex-col flex-1 overflow-x-hidden overflow-y-hidden bg-base-900"
                             >
-                                {/* Inner Track Scale Canvas — stretches to waveformPixelWidth so native scrolling captures everything.
-                                    At zoom=0 we MUST use '100%' so the canvas shrinks with the clip when a longer track is added. */}
-                                <div style={{ width: localZoom > 0 && waveformPixelWidth > 0 ? waveformPixelWidth : '100%', minWidth: '100%', flex: '1 0 0', position: 'relative' }}>
+                                <div style={{ width: '100%', minWidth: '100%', flex: '1 0 0', position: 'relative' }}>
                                     
                                     {/* WaveSurfer rendering target */}
                                     <div ref={waveformRef} className="absolute inset-0"></div>
@@ -1826,42 +1836,42 @@ export default function TrackCard({
                                         {/* Per-segment effect visuals — memoized, isolated from RAF ticks */}
                                         {segmentEffectVisuals}
 
-                                        {/* Master BPM beat grid — faint phase-locked lines, visible at localZoom >= 65 */}
-                                        {localZoom >= 65 && audioDuration > 0 && masterBeatGrid.length > 0 && waveformPixelWidth > 0 && (
-                                            <div className="absolute inset-y-0 left-0 pointer-events-none z-[13]" style={{ width: waveformPixelWidth }}>
-                                                {masterBeatGrid.map((t, i) => (
-                                                    <div
-                                                        key={`mbg-${i}`}
-                                                        className="absolute top-0 bottom-0 w-px bg-base-600/30"
-                                                        style={{ left: `${(t / audioDuration) * 100}%` }}
-                                                    />
-                                                ))}
-                                            </div>
-                                        )}
-
-                                        {/* Per-track analyzed beat markers — slightly brighter, visible at localZoom >= 65 */}
-                                        {localZoom >= 65 && audioDuration > 0 && adjustedBeatPositions.length > 0 && waveformPixelWidth > 0 && (
-                                            <div className="absolute inset-y-0 left-0 pointer-events-none z-[15]" style={{ width: waveformPixelWidth }}>
-                                                {adjustedBeatPositions.map((t, i) => (
-                                                    <div
-                                                        key={`beat-${i}`}
-                                                        className="absolute top-0 bottom-0 w-px bg-[#59546C]"
-                                                        style={{ left: `${(t / audioDuration) * 100}%` }}
-                                                    />
-                                                ))}
-                                            </div>
+                                        {/* Beat markers — single set, visible at localZoom >= 65.
+                                            Essentia beats (raw buffer-time positions) are preferred: the waveform
+                                            display already applies speed via effectiveDuration, so these naturally
+                                            compress/expand to align with master BPM after a sync — no separate
+                                            adjustment needed. Fall back to the master beat grid only when Essentia
+                                            analysis hasn't produced beat data yet. */}
+                                        {localZoom >= 120 && audioDuration > 0 && containerWidth > 0 && (
+                                            beatPositions && beatPositions.length > 0 ? (
+                                                <div className="absolute inset-0 pointer-events-none z-[13]">
+                                                    {beatPositions.map((t, i) => (
+                                                        <div
+                                                            key={`beat-${i}`}
+                                                            className="absolute top-0 bottom-0 w-px bg-[#59546C]"
+                                                            style={{ left: `${(t / audioDuration) * 100}%` }}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            ) : masterBeatGrid.length > 0 ? (
+                                                <div className="absolute inset-0 pointer-events-none z-[13]">
+                                                    {masterBeatGrid.map((t, i) => (
+                                                        <div
+                                                            key={`mbg-${i}`}
+                                                            className="absolute top-0 bottom-0 w-px bg-base-600/30"
+                                                            style={{ left: `${(t * parseFloat(speed) / audioDuration) * 100}%` }}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            ) : null
                                         )}
 
 
                                         {/* Segment region highlights — click to seek + activate. Reorder via strip below. */}
                                         {audioUrl && segments.map(seg => {
                                             const isActive = seg.id === activeSegmentId;
-                                            const left = localZoom > 0 && waveformPixelWidth > 0
-                                                ? seg.startPct * waveformPixelWidth
-                                                : `${seg.startPct * 100}%`;
-                                            const width = localZoom > 0 && waveformPixelWidth > 0
-                                                ? (seg.endPct - seg.startPct) * waveformPixelWidth
-                                                : `${(seg.endPct - seg.startPct) * 100}%`;
+                                            const left  = `${seg.startPct * 100}%`;
+                                            const width = `${(seg.endPct - seg.startPct) * 100}%`;
                                             return (
                                                 <div
                                                     key={`hl-${seg.id}`}
@@ -1881,18 +1891,14 @@ export default function TrackCard({
                                     </div>
                                 </div>
 
-                                {/* Segment strip — INSIDE the scroll container so it moves with the waveform at any zoom level.
-                                    Width matches the inner canvas width exactly. */}
+                                {/* Segment strip — always fills clip width (100%). Canvas has no horizontal overflow. */}
                                 {audioUrl && segments.length > 0 && (
                                     <div className="flex items-stretch border-t border-base-700/50 bg-[#0a0b10] shrink-0"
-                                        style={{ width: localZoom > 0 && waveformPixelWidth > 0 ? waveformPixelWidth : '100%', minWidth: '100%', height: 32 }}>
+                                        style={{ width: '100%', minWidth: '100%', height: 32 }}>
                                         {segments.map((seg, idx) => {
-                                            const isActive = seg.id === activeSegmentId;
                                             const canLeft  = idx > 0 && segments.length > 1;
                                             const canRight = idx < segments.length - 1;
-                                            const blockW   = localZoom > 0 && waveformPixelWidth > 0
-                                                ? `${(seg.endPct - seg.startPct) * waveformPixelWidth}px`
-                                                : `${(seg.endPct - seg.startPct) * 100}%`;
+                                            const blockW   = `${(seg.endPct - seg.startPct) * 100}%`;
                                             return (
                                                 <div
                                                     key={`strip-${seg.id}`}
@@ -1900,7 +1906,7 @@ export default function TrackCard({
                                                         border-r border-base-700/30 last:border-r-0 overflow-hidden transition-colors shrink-0
                                                         ${seg.isDeleted ? 'opacity-20 cursor-default' : 'cursor-pointer'}
                                                         ${seg.isMuted ? 'opacity-40' : ''}
-                                                        ${isActive && !seg.isDeleted ? 'bg-orange-500/15' : 'hover:bg-base-800/60'}`}
+                                                        hover:bg-base-800/60`}
                                                     style={{ width: blockW, minWidth: 24 }}
                                                     onClick={(e) => { e.stopPropagation(); if (!seg.isDeleted) activateSegmentRef.current?.(seg.id); }}
                                                     title={`Segment ${idx + 1}${seg.isMuted ? ' (muted)' : ''}${seg.isDeleted ? ' (deleted)' : ''}`}
@@ -1913,7 +1919,7 @@ export default function TrackCard({
                                                             title="Move segment left"
                                                         >‹</button>
                                                     )}
-                                                    <span className={`text-[11px] font-mono font-bold leading-none z-[1] pointer-events-none ${isActive && !seg.isDeleted ? 'text-orange-300' : 'text-base-400'}`}>
+                                                    <span className="text-[11px] font-mono font-bold leading-none z-[1] pointer-events-none text-base-400">
                                                         {seg.isDeleted ? '✕' : seg.isMuted ? `${idx + 1}M` : idx + 1}
                                                     </span>
                                                     {canRight && (
@@ -1931,6 +1937,8 @@ export default function TrackCard({
                                 )}
                             </div>
                         </div>
+                        </div>{/* end timeline content */}
+                        </div>{/* end scrollable viewport */}
 
                     </div>
                 </div>}
@@ -1949,6 +1957,33 @@ export default function TrackCard({
                             Settings
                             {isSettingsExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                         </button>
+
+                        {/* Per-track zoom slider */}
+                        {audioUrl && (
+                            <div className="flex items-center gap-1.5 group shrink-0" onClick={(e) => e.stopPropagation()}>
+                                <ZoomIn size={11} className="text-base-600 group-hover:text-base-400 transition-colors shrink-0" />
+                                <div className="flex flex-col gap-0">
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="400"
+                                        step="10"
+                                        value={localZoom}
+                                        disabled={!isVisible}
+                                        onChange={(e) => setLocalZoom(parseInt(e.target.value, 10))}
+                                        className={`w-28 h-1 bg-base-700 rounded-lg appearance-none accent-base-500 outline-none ${!isVisible ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
+                                    />
+                                    <div className="flex justify-between w-28 px-px mt-0.5">
+                                        {[1,2,3,4,5].map(n => (
+                                            <span key={n} className="text-[7px] font-mono text-base-700 leading-none">{n}</span>
+                                        ))}
+                                    </div>
+                                </div>
+                                <span className="text-[10px] font-mono text-base-600 group-hover:text-base-400 transition-colors w-8 text-right tabular-nums">
+                                    {(1 + localZoom / 100).toFixed(1)}×
+                                </span>
+                            </div>
+                        )}
 
                         <span className="text-[10px] font-mono text-white tabular-nums select-none ml-auto">
                             {formatTimestamp(displayTimeSec)} / {formatTimestamp((audioDuration || 0) + (offsetSec || 0))}
