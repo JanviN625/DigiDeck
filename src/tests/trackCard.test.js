@@ -64,6 +64,17 @@ jest.mock('../spotify/appContext', () => ({
     useMix: jest.fn(),
 }));
 
+jest.mock('../firebase/firebase', () => ({
+    useFirebaseAuth: jest.fn(() => ({ user: null })),
+    logEvent: jest.fn(),
+}));
+
+jest.mock('../firebase/firebaseConfig', () => ({
+    auth: {},
+    db: {},
+    storage: {},
+}));
+
 jest.mock('../utils/useSettings', () => ({
     useSettings: jest.fn(),
     // Keep matchesKeybind functional so keydown effects work correctly.
