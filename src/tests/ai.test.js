@@ -2,7 +2,7 @@
 // Requirements: [NFR-010]
 
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import AIPanel from '../components/AIPanel';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -112,6 +112,15 @@ beforeEach(() => {
     delete process.env.REACT_APP_ANTHROPIC_API_KEY;
     setupMocks();
     mockFetch();
+});
+
+afterEach(async () => {
+    // Flush pending microscopic timers/promises from mockFetch 
+    // to prevent "update not wrapped in act(...)" warnings 
+    // which fail GitHub Actions pipelines under CI=true.
+    await act(async () => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+    });
 });
 
 // ─── AIPanel — rendering ──────────────────────────────────────────────────────
