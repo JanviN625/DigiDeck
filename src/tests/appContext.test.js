@@ -428,132 +428,83 @@ describe('triggerMasterStop', () => {
     });
 });
 
-// ─── Workspace persistence ────────────────────────────────────────────────────
+// ─── Workspace initialization ─────────────────────────────────────────────────
 
-describe('workspace persistence', () => { // [FR-007]
+describe('workspace initialization', () => { // [FR-007]
     beforeEach(() => {
         setupMocks();
-        jest.useFakeTimers();
         localStorage.clear();
     });
-    afterEach(() => jest.useRealTimers());
 
-    it('loads saved workspace from localStorage when a user signs in', async () => {
-        const saved = [
-            { id: 10, title: 'Saved Track A', initiallyExpanded: false },
-            { id: 11, title: 'Saved Track B', initiallyExpanded: false },
-        ];
-        localStorage.setItem('digideck_workspace_user_abc', JSON.stringify(saved));
+    it('starts with default tracks on login (no localStorage restore)', async () => {
+        const { result } = renderMix();
+
+        await act(async () => { capturedAuthCallback({ uid: 'user_abc' }); });
+
+        expect(result.current.tracks.map(t => t.title)).toEqual(['Track 1', 'Track 2']);
+    });
+
+    it('does not restore workspace from localStorage even if data exists', async () => {
+        localStorage.setItem('digideck_workspace_user_abc', JSON.stringify([
+            { id: 10, title: 'Old Track A' },
+        ]));
 
         const { result } = renderMix();
 
         await act(async () => { capturedAuthCallback({ uid: 'user_abc' }); });
 
-        expect(result.current.tracks.map(t => t.title)).toEqual(['Saved Track A', 'Saved Track B']);
-    });
-
-    it('falls back to default tracks when localStorage has no saved workspace', async () => {
-        const { result } = renderMix();
-
-        await act(async () => { capturedAuthCallback({ uid: 'brand_new_user' }); });
-
+        // Workspace should still be default tracks, not restored from localStorage
         expect(result.current.tracks.map(t => t.title)).toEqual(['Track 1', 'Track 2']);
     });
 
     it('resets to default tracks on sign-out', async () => {
-        localStorage.setItem('digideck_workspace_user_abc', JSON.stringify([
-            { id: 9, title: 'My Saved Track' },
-        ]));
         const { result } = renderMix();
 
         await act(async () => { capturedAuthCallback({ uid: 'user_abc' }); });
+        await act(async () => { result.current.handleAddTrack({ title: 'My Track', audioUrl: 'url' }); });
         await act(async () => { capturedAuthCallback(null); });
 
         expect(result.current.tracks.map(t => t.title)).toEqual(['Track 1', 'Track 2']);
     });
+});
 
-    it('saves the workspace to localStorage after a 500ms debounce', () => {
+// ─── handleOverwriteWorkspace ─────────────────────────────────────────────────
+
+describe('handleOverwriteWorkspace', () => { // [FR-028]
+    beforeEach(() => setupMocks());
+
+    it('replaces tracks with the provided array', () => {
         const { result } = renderMix();
+        const newTracks = [{ id: 99, title: 'Loaded Track', initiallyExpanded: false }];
 
-        act(() => { capturedAuthCallback({ uid: 'user_persist' }); });
+        act(() => { result.current.handleOverwriteWorkspace({ tracks: newTracks, masterBpm: 140, globalZoom: 20 }); });
 
-        act(() => { result.current.handleAddTrack(); });
-        act(() => { jest.advanceTimersByTime(600); });
-
-        const saved = localStorage.getItem('digideck_workspace_user_persist');
-        expect(saved).not.toBeNull();
-        expect(JSON.parse(saved)).toHaveLength(3);
+        expect(result.current.tracks).toEqual(newTracks);
     });
 
-    it('does not save to localStorage when no user is authenticated', () => {
+    it('updates masterBpm when provided', () => {
         const { result } = renderMix();
 
-        act(() => {
-            result.current.handleAddTrack();
-            jest.advanceTimersByTime(600);
-        });
+        act(() => { result.current.handleOverwriteWorkspace({ tracks: [], masterBpm: 120, globalZoom: 0 }); });
 
-        const keys = Object.keys(localStorage);
-        expect(keys.filter(k => k.startsWith('digideck_workspace_'))).toHaveLength(0);
+        expect(result.current.masterBpm).toBe(120);
     });
 
-    it('saves audioUrl as a string reference — no raw audio binary fields', () => { // [FR-008]
+    it('updates globalZoom when provided', () => {
         const { result } = renderMix();
 
-        act(() => { capturedAuthCallback({ uid: 'user_persist' }); });
-        act(() => {
-            result.current.handleAddTrack({
-                title: 'Track With Audio',
-                audioUrl: 'https://storage.firebase.example/audio.mp3',
-            });
-        });
-        act(() => { jest.advanceTimersByTime(600); });
+        act(() => { result.current.handleOverwriteWorkspace({ tracks: [], masterBpm: 128, globalZoom: 50 }); });
 
-        const saved = JSON.parse(localStorage.getItem('digideck_workspace_user_persist'));
-        const trackWithAudio = saved.find(t => t.audioUrl);
-        expect(trackWithAudio).toBeDefined();
-        expect(typeof trackWithAudio.audioUrl).toBe('string');
-        expect(trackWithAudio.audioBuffer).toBeUndefined();
-        expect(trackWithAudio.audioData).toBeUndefined();
+        expect(result.current.globalZoom).toBe(50);
     });
 
-    it('sets storageError when localStorage.setItem throws (quota exceeded)', () => { // [FR-007]
+    it('adds the overwritten tracks to undo history', () => {
         const { result } = renderMix();
-        act(() => { capturedAuthCallback({ uid: 'user_quota' }); });
+        const newTracks = [{ id: 77, title: 'Loaded' }];
 
-        // Make the next setItem throw to simulate a full quota
-        jest.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
-            throw new DOMException('QuotaExceededError');
-        });
+        act(() => { result.current.handleOverwriteWorkspace({ tracks: newTracks }); });
 
-        act(() => {
-            result.current.handleAddTrack({ title: 'New Track' });
-            jest.advanceTimersByTime(600);
-        });
-
-        expect(result.current.storageError).toBe(
-            'Workspace could not be auto-saved — browser storage may be full.'
-        );
-    });
-
-    it('clears storageError after 5 seconds', () => { // [FR-007]
-        const { result } = renderMix();
-        act(() => { capturedAuthCallback({ uid: 'user_quota2' }); });
-
-        jest.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
-            throw new DOMException('QuotaExceededError');
-        });
-
-        act(() => {
-            result.current.handleAddTrack({ title: 'New Track' });
-            jest.advanceTimersByTime(600); // debounce fires → setItem throws → error set
-        });
-
-        expect(result.current.storageError).not.toBeNull();
-
-        act(() => { jest.advanceTimersByTime(5000); }); // 5 s auto-clear
-
-        expect(result.current.storageError).toBeNull();
+        expect(result.current.canUndo).toBe(true);
     });
 });
 
@@ -811,5 +762,98 @@ describe('useSpotifyConnect', () => {
 
         expect(result.current.isSpotifyConnected).toBe(false);
         expect(result.current.spotifyProfile).toBeNull();
+    });
+
+    it('resets isConnecting to false when initiateLogin rejects', async () => {
+        const { initiateLogin } = require('../spotify/spotifyApi');
+        initiateLogin.mockRejectedValueOnce(new Error('OAuth cancelled'));
+
+        const { result } = renderHook(() => useSpotifyConnect());
+
+        await act(async () => { await result.current.connectSpotify(); });
+
+        expect(result.current.isConnecting).toBe(false);
+    });
+});
+
+// ─── handleDeleteTrack — skipHistory ─────────────────────────────────────────
+
+describe('handleDeleteTrack — skipHistory', () => {
+    beforeEach(() => {
+        setupMocks();
+        localStorage.clear();
+    });
+
+    it('does not add to undo history when skipHistory=true', () => {
+        const { result } = renderMix();
+        const trackId = result.current.tracks[0].id;
+        act(() => { result.current.handleDeleteTrack(trackId, true); });
+        expect(result.current.canUndo).toBe(false);
+    });
+});
+
+// ─── handleOverwriteWorkspace — partial data ──────────────────────────────────
+
+describe('handleOverwriteWorkspace — partial data', () => {
+    beforeEach(() => {
+        setupMocks();
+        localStorage.clear();
+    });
+
+    it('leaves masterBpm and globalZoom unchanged when only tracks are provided', () => {
+        const { result } = renderMix();
+        const originalBpm = result.current.masterBpm;
+        const originalZoom = result.current.globalZoom;
+
+        act(() => { result.current.handleOverwriteWorkspace({ tracks: [{ id: 55, title: 'Partial' }] }); });
+
+        expect(result.current.masterBpm).toBe(originalBpm);
+        expect(result.current.globalZoom).toBe(originalZoom);
+    });
+
+    it('updates only masterBpm when zoom is omitted', () => {
+        const { result } = renderMix();
+        const originalZoom = result.current.globalZoom;
+
+        act(() => { result.current.handleOverwriteWorkspace({ tracks: [], masterBpm: 175 }); });
+
+        expect(result.current.masterBpm).toBe(175);
+        expect(result.current.globalZoom).toBe(originalZoom);
+    });
+});
+
+// ─── handleDuplicateTrack — deep copy ─────────────────────────────────────────
+
+describe('handleDuplicateTrack — deep copy', () => {
+    beforeEach(() => {
+        setupMocks();
+        localStorage.clear();
+    });
+
+    it('creates independent segment arrays so copy and source do not share references', () => {
+        const { result } = renderMix();
+        const srcId = result.current.tracks[0].id;
+
+        // Give the source track segments with nested objects
+        act(() => {
+            result.current.handleUpdateTrack(srcId, {
+                initialSegments: [{
+                    id: 'seg1', start: 0, end: 10,
+                    eqKills: { low: false },
+                    effects: [{ id: 'e1', params: { mix: 0.5 } }],
+                }],
+            }, true);
+        });
+
+        const trackData = result.current.tracks.find(t => t.id === srcId);
+        act(() => { result.current.handleDuplicateTrack(srcId, trackData); });
+
+        const src = result.current.tracks.find(t => t.id === srcId);
+        const copy = result.current.tracks.find(t => t.id !== srcId);
+
+        expect(src.initialSegments).not.toBe(copy.initialSegments);
+        expect(src.initialSegments[0]).not.toBe(copy.initialSegments[0]);
+        expect(src.initialSegments[0].eqKills).not.toBe(copy.initialSegments[0].eqKills);
+        expect(src.initialSegments[0].effects[0]).not.toBe(copy.initialSegments[0].effects[0]);
     });
 });

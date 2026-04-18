@@ -10,6 +10,7 @@ app.use('/api/aiChat', require('./api/aiChat'));
 app.use('/api/authTokenValid', require('./api/authTokenValid'));
 app.use('/api/identifyTrack', require('./api/identifyTrack'));
 app.use('/api/parseFilename', require('./api/parseFilename'));
+app.use('/api/findSpotifyTrack', require('./api/findSpotifyTrack'));
 
 const PORT = process.env.API_PORT || 3001;
 app.listen(PORT, '127.0.0.1', () => {

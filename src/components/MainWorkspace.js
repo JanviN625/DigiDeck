@@ -87,17 +87,17 @@ export default function MainWorkspace() {
     return (
         <main className="flex-1 bg-base-900 p-8 overflow-y-auto relative">
             {trackLimitError && (
-                <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 bg-red-900/90 border border-red-500/50 text-red-100 px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm animate-in fade-in slide-in-from-top-4 duration-300">
-                    <AlertCircle size={18} className="text-red-400 shrink-0" />
+                <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 bg-danger-900/90 border border-danger-700/50 text-danger-200 px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm animate-in fade-in slide-in-from-top-4 duration-300">
+                    <AlertCircle size={18} className="text-danger-400 shrink-0" />
                     <span className="text-sm font-medium">{trackLimitError}</span>
-                    <button onClick={() => setTrackLimitError(null)} className="ml-2 text-red-400 hover:text-red-200 transition-colors">
+                    <button onClick={() => setTrackLimitError(null)} className="ml-2 text-danger-400 hover:text-danger-200 transition-colors">
                         <X size={16} />
                     </button>
                 </div>
             )}
             {storageError && (
-                <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 bg-amber-900/90 border border-amber-500/50 text-amber-100 px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm animate-in fade-in slide-in-from-top-4 duration-300">
-                    <AlertCircle size={18} className="text-amber-400 shrink-0" />
+                <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-3 bg-caution-900/90 border border-caution-700/50 text-caution-200 px-4 py-3 rounded-lg shadow-lg backdrop-blur-sm animate-in fade-in slide-in-from-top-4 duration-300">
+                    <AlertCircle size={18} className="text-caution-400 shrink-0" />
                     <span className="text-sm font-medium">{storageError}</span>
                 </div>
             )}

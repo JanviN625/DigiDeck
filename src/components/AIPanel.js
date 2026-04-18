@@ -259,12 +259,11 @@ function MarkdownMessage({ content }) {
 
 // --- AIPanel -----------------------------------------------------------------
 
-export default function AIPanel() {
+export default function AIPanel({ isCollapsed, setIsCollapsed }) {
     const { tracks, getLiveTracks } = useMix();
     const { user } = useFirebaseAuth();
     const displayName = user?.displayName || user?.email || 'User';
     const avatarSrc   = user?.photoURL || null;
-    const [isCollapsed, setIsCollapsed] = useState(false);
     const [panelWidth, setPanelWidth]   = useState(MIN_WIDTH);
     const [input, setInput]             = useState('');
     const [loading, setLoading]         = useState(false);
@@ -499,8 +498,8 @@ export default function AIPanel() {
 
                         {/* All-at-limit warning */}
                         {allChatsAtLimit && (
-                            <div className="px-5 py-3 bg-red-950/40 border-b border-red-900/40 shrink-0">
-                                <p className="text-xs text-red-400">
+                            <div className="px-5 py-3 bg-danger-950/40 border-b border-danger-900/40 shrink-0">
+                                <p className="text-xs text-danger-400">
                                     All {MAX_CHATS} chats have reached the context limit. Delete a chat to start fresh suggestions.
                                 </p>
                             </div>
@@ -528,14 +527,14 @@ export default function AIPanel() {
                                         <p className="text-xs text-base-500 mt-0.5">
                                             {chat.messages.length} message{chat.messages.length !== 1 ? 's' : ''}
                                             {chat.messages.length >= CONTEXT_LIMIT && (
-                                                <span className="text-amber-500 ml-1">- Context full</span>
+                                                <span className="text-caution-400 ml-1">- Context full</span>
                                             )}
                                         </p>
                                     </div>
                                     <button
                                         onClick={(e) => deleteChat(chat.id, e)}
                                         title="Delete chat"
-                                        className="ml-3 p-1.5 rounded-lg text-base-500 hover:text-red-400 hover:bg-base-600 transition-colors shrink-0"
+                                        className="ml-3 p-1.5 rounded-lg text-base-500 hover:text-danger-400 hover:bg-base-600 transition-colors shrink-0"
                                     >
                                         <Trash2 size={13} />
                                     </button>
@@ -625,8 +624,8 @@ export default function AIPanel() {
                                     <div className="bg-base-800 border border-base-700 rounded-2xl rounded-bl-none px-3.5 py-2.5 text-sm text-base-200 max-w-[85%] shadow-sm">
                                         <div className="flex items-start justify-between gap-2 mb-1">
                                             <div className="flex items-center gap-1.5">
-                                                <AlertTriangle size={10} className="text-red-400 shrink-0 mt-0.5" />
-                                                <span className="text-[10px] font-semibold uppercase tracking-wide text-red-400">Heads up</span>
+                                                <AlertTriangle size={10} className="text-danger-400 shrink-0 mt-0.5" />
+                                                <span className="text-[10px] font-semibold uppercase tracking-wide text-danger-400">Heads up</span>
                                             </div>
                                             <button
                                                 onClick={() => setDismissedDisclosures(prev => new Set([...prev, activeChatId]))}

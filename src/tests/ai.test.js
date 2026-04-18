@@ -128,14 +128,22 @@ describe('AIPanel — rendering', () => {
     });
 
     it('collapses panel when collapse button clicked', () => {
-        render(<AIPanel />);
+        function AIWithState() {
+            const [isCollapsed, setIsCollapsed] = React.useState(false);
+            return <AIPanel isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} />;
+        }
+        render(<AIWithState />);
         fireEvent.click(screen.getByTitle('Collapse Panel'));
         expect(screen.queryByPlaceholderText('Ask for track suggestions…')).not.toBeInTheDocument();
         expect(screen.getByTitle('Expand AI Panel')).toBeInTheDocument();
     });
 
     it('expands panel after collapsing', () => {
-        render(<AIPanel />);
+        function AIWithState() {
+            const [isCollapsed, setIsCollapsed] = React.useState(false);
+            return <AIPanel isCollapsed={isCollapsed} setIsCollapsed={setIsCollapsed} />;
+        }
+        render(<AIWithState />);
         fireEvent.click(screen.getByTitle('Collapse Panel'));
         fireEvent.click(screen.getByTitle('Expand AI Panel'));
         expect(screen.getByPlaceholderText('Ask for track suggestions…')).toBeInTheDocument();

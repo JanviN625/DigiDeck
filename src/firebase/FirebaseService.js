@@ -86,6 +86,41 @@ const FirebaseService = {
     const ref = doc(db, 'users', uid, 'projects', projectId);
     await deleteDoc(ref);
   },
+
+  // ─── Slot-Based Project Save / Load (5 fixed slots per user) ────────────────
+
+  // slotId: 'slot_1' … 'slot_5'
+  // projectData: { projectName, tracks (audioBlob stripped), masterBpm, globalZoom,
+  //                libraryCollapsed, aiCollapsed }
+  // isNewSlot: true when writing to an empty slot for the first time (adds createdAt)
+  async saveProjectSlot(uid, slotId, projectData, isNewSlot) {
+    const ref = doc(db, 'users', uid, 'projectSlots', slotId);
+    const { tracks = [], ...rest } = projectData;
+    const serialized = tracks.map(({ audioBlob, ...track }) => track);
+    const data = {
+      ...rest,
+      tracks: serialized,
+      updatedAt: serverTimestamp(),
+    };
+    if (isNewSlot) data.createdAt = serverTimestamp();
+    await setDoc(ref, data);
+  },
+
+  // Returns an array of 5 entries (index 0 = slot_1 … index 4 = slot_5).
+  // Each entry is either the saved project data object (with an `id` field) or null if the slot is empty.
+  async getProjectSlots(uid) {
+    const slotIds = ['slot_1', 'slot_2', 'slot_3', 'slot_4', 'slot_5'];
+    const refs = slotIds.map(id => doc(db, 'users', uid, 'projectSlots', id));
+    const snaps = await Promise.all(refs.map(r => getDoc(r)));
+    return snaps.map((snap, i) =>
+      snap.exists() ? { id: slotIds[i], ...snap.data() } : null
+    );
+  },
+
+  async deleteProjectSlot(uid, slotId) {
+    const ref = doc(db, 'users', uid, 'projectSlots', slotId);
+    await deleteDoc(ref);
+  },
 };
 
 export default FirebaseService;

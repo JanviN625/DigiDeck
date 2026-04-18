@@ -8,6 +8,7 @@ import {
     getUniqueTrackName,
     readId3Tags,
     spotifyConfirmMatch,
+    buildSpotifyQuery,
 } from '../utils/helpers';
 import { useAudioEngine } from '../audio/useAudioEngine';
 
@@ -518,6 +519,26 @@ describe('spotifyConfirmMatch', () => { // [FR-021]
         // 'starmanremaster2012' vs 'starman' — 'starman' is contained in the normalised form
         const track = makeSpotifyTrack('Starman (Remaster 2012)');
         expect(spotifyConfirmMatch('Starman', [track])).toBe(track);
+    });
+});
+
+// ─── buildSpotifyQuery ────────────────────────────────────────────────────────
+
+describe('buildSpotifyQuery', () => { // [FR-021]
+    it('returns a field-filtered query when both title and artist are provided', () => {
+        expect(buildSpotifyQuery('Blinding Lights', 'The Weeknd')).toBe('track:Blinding Lights artist:The Weeknd');
+    });
+
+    it('returns bare title when only title is provided', () => {
+        expect(buildSpotifyQuery('Bohemian Rhapsody', null)).toBe('Bohemian Rhapsody');
+    });
+
+    it('returns bare artist when only artist is provided', () => {
+        expect(buildSpotifyQuery(null, 'Queen')).toBe('Queen');
+    });
+
+    it('returns empty string when both title and artist are null', () => {
+        expect(buildSpotifyQuery(null, null)).toBe('');
     });
 });
 

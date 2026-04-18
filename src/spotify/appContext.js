@@ -122,7 +122,17 @@ export function AppProviders({ children }) {
 
     const [currentUid, setCurrentUid] = useState(null);
     const [trackLimitError, setTrackLimitError] = useState(null);
+    // eslint-disable-next-line no-unused-vars
     const [storageError, setStorageError] = useState(null);
+
+    // Panel collapse state — lifted here so Header can restore them on project load.
+    // Defaults: library open, AI closed (new-user experience on every login).
+    const [isLibraryCollapsed, setIsLibraryCollapsed] = useState(false);
+    const [isAICollapsed, setIsAICollapsed] = useState(true);
+
+    // Tracks which project slot is currently active so uploads route to the correct
+    // per-slot subcollection. null = no project loaded (fresh workspace).
+    const [activeSlotId, setActiveSlotId] = useState(null);
     const [universalIsPlaying, setUniversalIsPlaying] = useState(false);
     const [masterStopSignal, setMasterStopSignal] = useState(0);
     const [globalZoom, setGlobalZoom] = useState(0);
@@ -134,40 +144,21 @@ export function AppProviders({ children }) {
         masterTimeRef.current = 0;
     }, []);
 
-    // Auth-gated workspace hydration — loads the correct user's saved workspace
-    // when they sign in, and resets to defaults on sign-out or emulator reset
-    // (which invalidates tokens and fires this listener with null).
+    // Auth-gated UID tracking — workspace always starts empty on login.
+    // Users explicitly load a project via the Load modal to restore their work.
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (user) => {
             if (user) {
                 setCurrentUid(user.uid);
-                try {
-                    const saved = localStorage.getItem(`digideck_workspace_${user.uid}`);
-                    if (saved) setTracks(JSON.parse(saved));
-                } catch {}
             } else {
                 // Signed out, emulator reset, or expired session — wipe state
                 setCurrentUid(null);
                 setTracks(DEFAULT_TRACKS);
+                setActiveSlotId(null);
             }
         });
         return () => unsubscribe();
     }, [setTracks]);
-
-    // Debounced workspace persistence — keyed by UID so accounts never share data.
-    // Skipped entirely when no user is authenticated.
-    useEffect(() => {
-        if (!currentUid) return;
-        const timer = setTimeout(() => {
-            try {
-                localStorage.setItem(`digideck_workspace_${currentUid}`, JSON.stringify(tracks));
-            } catch {
-                setStorageError('Workspace could not be auto-saved — browser storage may be full.');
-                setTimeout(() => setStorageError(null), 5000);
-            }
-        }, 500);
-        return () => clearTimeout(timer);
-    }, [tracks, currentUid]);
 
     // ─── History Management ─────────────────────────────────────────────────────
 
@@ -375,6 +366,18 @@ export function AppProviders({ children }) {
         });
     }, [commitHistory, setTracks]);
 
+    // Restores a full project snapshot atomically — used by Header on project load.
+    const handleOverwriteWorkspace = useCallback(({ tracks: newTracks, masterBpm: newBpm, globalZoom: newZoom }) => {
+        if (Array.isArray(newTracks)) {
+            setTracks(prev => {
+                commitHistory(newTracks);
+                return newTracks;
+            });
+        }
+        if (newBpm !== undefined) setMasterBpm(newBpm);
+        if (newZoom !== undefined) setGlobalZoom(newZoom);
+    }, [commitHistory, setTracks, setMasterBpm, setGlobalZoom]);
+
     const masterDuration = useMemo(() => {
         if (!tracks.length) return 0;
         return Math.max(0, ...tracks.map(t => {
@@ -410,7 +413,7 @@ export function AppProviders({ children }) {
 
     return (
         <SpotifyContext.Provider value={{ ...SpotifyService }}>
-            <MixContext.Provider value={{ tracks, getLiveTracks, handleAddTrack, handleDuplicateTrack, handleDeleteTrack, handleMoveTrack, handleUpdateTrack, handleUpdateTrackDuration, handleClearAllTracks, handleOverwriteTracks, trackLimitError, setTrackLimitError, storageError, universalIsPlaying, setUniversalIsPlaying, masterStopSignal, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleUndo, handleRedo, commitCurrentState, canUndo: historyState.index > 0, canRedo: historyState.index < historyState.list.length - 1 }}>
+            <MixContext.Provider value={{ tracks, getLiveTracks, handleAddTrack, handleDuplicateTrack, handleDeleteTrack, handleMoveTrack, handleUpdateTrack, handleUpdateTrackDuration, handleClearAllTracks, handleOverwriteTracks, handleOverwriteWorkspace, trackLimitError, setTrackLimitError, storageError, currentUid, universalIsPlaying, setUniversalIsPlaying, masterStopSignal, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleUndo, handleRedo, commitCurrentState, canUndo: historyState.index > 0, canRedo: historyState.index < historyState.list.length - 1, isLibraryCollapsed, setIsLibraryCollapsed, isAICollapsed, setIsAICollapsed, activeSlotId, setActiveSlotId }}>
                 {children}
             </MixContext.Provider>
         </SpotifyContext.Provider>

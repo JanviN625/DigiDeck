@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Pencil, Play, Pause, Square, ZoomIn, Activity, FolderOpen, Trash2 } from 'lucide-react';
+import { Pencil, Play, Pause, Square, ZoomIn, Activity, FolderOpen, Save, Trash2, Plus } from 'lucide-react';
 import FirebaseService from '../firebase/FirebaseService';
 import { Avatar, Dropdown, DropdownTrigger, DropdownMenu, DropdownItem, DropdownSection, Spinner, Slider } from '@heroui/react';
 import { getDynamicInputWidth } from '../utils/helpers';
@@ -9,9 +9,30 @@ import AudioEngineService, { audioBufferToWAV } from '../audio/AudioEngine';
 import { AccountModal, SettingsModal } from './ProfileModal';
 import { useSettings, matchesKeybind } from '../utils/useSettings';
 
+// Returns a human-readable relative time string from a Firestore Timestamp or Date.
+function formatRelativeTime(ts) {
+    if (!ts) return '';
+    const date = ts.toDate ? ts.toDate() : new Date(ts);
+    const diff = (Date.now() - date.getTime()) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    if (diff < 86400 * 7) return `${Math.floor(diff / 86400)}d ago`;
+    return date.toLocaleDateString();
+}
+
+const SLOT_IDS = ['slot_1', 'slot_2', 'slot_3', 'slot_4', 'slot_5'];
+
 export default function Header() {
     const { user, signOut } = useFirebaseAuth();
-    const { tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, handleUpdateTrack, handleClearAllTracks, handleOverwriteTracks, handleUndo, handleRedo } = useMix();
+    const {
+        tracks, universalIsPlaying, setUniversalIsPlaying, triggerMasterStop,
+        globalZoom, setGlobalZoom, masterBpm, setMasterBpm,
+        handleUpdateTrack, handleClearAllTracks, handleOverwriteWorkspace,
+        handleUndo, handleRedo,
+        isLibraryCollapsed, setIsLibraryCollapsed, isAICollapsed, setIsAICollapsed,
+        setActiveSlotId,
+    } = useMix();
 
     const handleSyncAllTracks = useCallback(() => {
         tracks.forEach(track => {
@@ -25,6 +46,7 @@ export default function Header() {
             handleUpdateTrack(track.id, { initialSegments: syncedSegments, initialSpeed: targetSpeed });
         });
     }, [tracks, masterBpm, handleUpdateTrack]);
+
     const { settings } = useSettings();
     const [projectName, setProjectName] = useState('Untitled project');
     const [isEditingProject, setIsEditingProject] = useState(false);
@@ -34,23 +56,117 @@ export default function Header() {
     const [saveAlert, setSaveAlert] = useState(false);
     const [saveError, setSaveError] = useState(false);
     const [showResetConfirm, setShowResetConfirm] = useState(false);
-    const [showLoadModal, setShowLoadModal] = useState(false);
-    const [savedProjects, setSavedProjects] = useState([]);
-    const [loadingProjects, setLoadingProjects] = useState(false);
-    const [loadError, setLoadError] = useState(null);
 
-    const handleSave = useCallback(async () => {
+    // ── Project Slots Modal ──────────────────────────────────────────────────
+    // modalMode: null | 'save' | 'load'
+    const [modalMode, setModalMode] = useState(null);
+    const [projectSlots, setProjectSlots] = useState([null, null, null, null, null]);
+    const [loadingSlots, setLoadingSlots] = useState(false);
+    const [slotError, setSlotError] = useState(null);
+    // Which slot is awaiting overwrite confirmation (slotId string or null)
+    const [pendingOverwriteSlot, setPendingOverwriteSlot] = useState(null);
+    const [isSavingSlot, setIsSavingSlot] = useState(false);
+
+    const fetchSlots = useCallback(async () => {
         if (!user?.uid) return;
+        setLoadingSlots(true);
+        setSlotError(null);
         try {
-            await FirebaseService.saveProject(user.uid, projectName, tracks);
+            const slots = await FirebaseService.getProjectSlots(user.uid);
+            setProjectSlots(slots);
+        } catch (err) {
+            console.error('Failed to fetch project slots:', err);
+            setSlotError('Failed to load projects.');
+        } finally {
+            setLoadingSlots(false);
+        }
+    }, [user]);
+
+    const handleOpenSave = useCallback(async () => {
+        if (!user?.uid) return;
+        setPendingOverwriteSlot(null);
+        setModalMode('save');
+        await fetchSlots();
+    }, [user, fetchSlots]);
+
+    const handleOpenLoad = useCallback(async () => {
+        if (!user?.uid) return;
+        setPendingOverwriteSlot(null);
+        setModalMode('load');
+        await fetchSlots();
+    }, [user, fetchSlots]);
+
+    const closeModal = useCallback(() => {
+        setModalMode(null);
+        setPendingOverwriteSlot(null);
+    }, []);
+
+    const handleConfirmSave = useCallback(async (slotId, existingProject) => {
+        if (!user?.uid || isSavingSlot) return;
+        setIsSavingSlot(true);
+        try {
+            await FirebaseService.saveProjectSlot(
+                user.uid,
+                slotId,
+                {
+                    projectName,
+                    tracks,
+                    masterBpm,
+                    globalZoom,
+                    libraryCollapsed: isLibraryCollapsed,
+                    aiCollapsed: isAICollapsed,
+                },
+                !existingProject // isNewSlot
+            );
+            setActiveSlotId(slotId);
             setSaveAlert(true);
             setTimeout(() => setSaveAlert(false), 2000);
+            closeModal();
         } catch (err) {
             console.error('Project save failed:', err);
             setSaveError(true);
             setTimeout(() => setSaveError(false), 3000);
+        } finally {
+            setIsSavingSlot(false);
         }
-    }, [user, projectName, tracks]);
+    }, [user, projectName, tracks, masterBpm, globalZoom, isLibraryCollapsed, isAICollapsed, isSavingSlot, setActiveSlotId, closeModal]);
+
+    const handleLoadFromSlot = useCallback(async (slotId) => {
+        if (!user?.uid) return;
+        try {
+            const slotIndex = SLOT_IDS.indexOf(slotId);
+            const project = projectSlots[slotIndex];
+            if (!project) return;
+            handleOverwriteWorkspace({
+                tracks: project.tracks ?? [],
+                masterBpm: project.masterBpm,
+                globalZoom: project.globalZoom,
+            });
+            if (typeof project.libraryCollapsed === 'boolean') setIsLibraryCollapsed(project.libraryCollapsed);
+            if (typeof project.aiCollapsed === 'boolean') setIsAICollapsed(project.aiCollapsed);
+            setProjectName(project.projectName ?? 'Untitled project');
+            setActiveSlotId(slotId);
+            closeModal();
+        } catch (err) {
+            console.error('Failed to load project:', err);
+            setSlotError('Failed to load project.');
+        }
+    }, [user, projectSlots, handleOverwriteWorkspace, setIsLibraryCollapsed, setIsAICollapsed, setActiveSlotId, closeModal]);
+
+    const handleDeleteSlot = useCallback(async (e, slotId) => {
+        e.stopPropagation();
+        if (!user?.uid) return;
+        // If this slot was pending overwrite, cancel that
+        if (pendingOverwriteSlot === slotId) setPendingOverwriteSlot(null);
+        try {
+            await FirebaseService.deleteProjectSlot(user.uid, slotId);
+            setProjectSlots(prev => prev.map((s, i) => SLOT_IDS[i] === slotId ? null : s));
+        } catch (err) {
+            console.error('Failed to delete project slot:', err);
+        }
+    }, [user, pendingOverwriteSlot]);
+
+    // ── Keybinds ─────────────────────────────────────────────────────────────
 
     useEffect(() => {
         const handleKeydown = (e) => {
@@ -62,7 +178,7 @@ export default function Header() {
             }
             if (matchesKeybind(e, settings.keybinds.saveProject)) {
                 e.preventDefault();
-                handleSave();
+                handleOpenSave();
             }
             if (matchesKeybind(e, settings.keybinds.undo)) {
                 e.preventDefault();
@@ -75,49 +191,7 @@ export default function Header() {
         };
         window.addEventListener('keydown', handleKeydown);
         return () => window.removeEventListener('keydown', handleKeydown);
-    }, [settings.keybinds, setUniversalIsPlaying, handleSave, handleUndo, handleRedo]);
-
-    const handleOpenLoad = useCallback(async () => {
-        if (!user?.uid) return;
-        setShowLoadModal(true);
-        setLoadingProjects(true);
-        setLoadError(null);
-        try {
-            const projects = await FirebaseService.getUserProjects(user.uid);
-            setSavedProjects(projects);
-        } catch (err) {
-            console.error('Failed to load projects:', err);
-            setLoadError('Failed to load projects.');
-        } finally {
-            setLoadingProjects(false);
-        }
-    }, [user]);
-
-    const handleLoadProject = useCallback(async (projectId) => {
-        if (!user?.uid) return;
-        try {
-            const project = await FirebaseService.loadProject(user.uid, projectId);
-            if (project) {
-                handleOverwriteTracks(project.tracks ?? []);
-                setProjectName(project.name ?? 'Untitled project');
-            }
-            setShowLoadModal(false);
-        } catch (err) {
-            console.error('Failed to load project:', err);
-            setLoadError('Failed to load project.');
-        }
-    }, [user, handleOverwriteTracks]);
-
-    const handleDeleteProject = useCallback(async (e, projectId) => {
-        e.stopPropagation();
-        if (!user?.uid) return;
-        try {
-            await FirebaseService.deleteProject(user.uid, projectId);
-            setSavedProjects(prev => prev.filter(p => p.id !== projectId));
-        } catch (err) {
-            console.error('Failed to delete project:', err);
-        }
-    }, [user]);
+    }, [settings.keybinds, setUniversalIsPlaying, handleOpenSave, handleUndo, handleRedo]);
 
     const handleExport = useCallback(async () => {
         if (renderingFor) return;
@@ -158,13 +232,11 @@ export default function Header() {
         return () => window.removeEventListener('keydown', handleKeydown);
     }, [settings.keybinds, handleOpenLoad, handleExport]);
 
-    // Resolve Profile Data
-    const displayName = user?.displayName || user?.email || 'User';
+    // ── Profile helpers ───────────────────────────────────────────────────────
 
-    // Avatar uses Firebase Auth photoURL permanently
+    const displayName = user?.displayName || user?.email || 'User';
     const avatarSrc = user?.photoURL || null;
 
-    // Custom initials logic: First character and last character before the '@' symbol
     const CustomInitials = (nameStr) => {
         if (!nameStr) return '?';
         const isEmail = nameStr.includes('@');
@@ -173,7 +245,6 @@ export default function Header() {
             if (username.length === 1) return username[0].toUpperCase();
             return (username[0] + username[username.length - 1]).toUpperCase();
         }
-        // Non-email fallback (e.g. Google displayName)
         const parts = nameStr.trim().split(/\s+/);
         if (parts.length === 1) {
             if (parts[0].length === 1) return parts[0].toUpperCase();
@@ -181,6 +252,8 @@ export default function Header() {
         }
         return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
     };
+
+    // ── Render ────────────────────────────────────────────────────────────────
 
     return (
         <>
@@ -258,7 +331,7 @@ export default function Header() {
                             onChange={(e) => setMasterBpm(Number(e.target.value))}
                             className="bg-transparent border border-transparent hover:border-base-700 focus:border-base-500 text-xs font-mono text-base-100 rounded px-1 w-12 outline-none text-center transition-colors appearance-none scrollbar-hide"
                             title="Master BPM"
-                            style={{ MozAppearance: 'textfield' }} // hide arrows in firefox
+                            style={{ MozAppearance: 'textfield' }}
                         />
                         <style>{`
                             input[type="number"]::-webkit-inner-spin-button,
@@ -278,24 +351,30 @@ export default function Header() {
                         Sync All
                     </button>
                     <div className="w-px h-4 bg-base-700 mx-1" />
-                    <div className="flex items-center gap-2 group w-32 px-1">
+                    <div className="flex items-center gap-2 group w-44 px-1">
                         <ZoomIn size={12} className="text-base-500 group-hover:text-base-300 transition-colors shrink-0" />
-                        <Slider
-                            aria-label="Global Zoom"
-                            size="sm"
-                            step={5}
-                            maxValue={100}
-                            minValue={0}
-                            value={globalZoom}
-                            onChange={setGlobalZoom}
-                            className="w-full"
-                            classNames={{
-                                track: "bg-base-700/50 border-y border-base-900",
-                                filler: "bg-base-500 group-hover:bg-base-400 transition-colors",
-                                thumb: "w-4 h-4 bg-base-300 hover:bg-base-200 transition-colors shadow-md rounded-full cursor-grab active:cursor-grabbing"
-                            }}
-                            renderThumb={() => <div />}
-                        />
+                        <div className="flex flex-col gap-0 flex-1">
+                            <Slider
+                                aria-label="Global Zoom"
+                                size="sm"
+                                step={10}
+                                maxValue={400}
+                                minValue={0}
+                                value={globalZoom}
+                                onChange={setGlobalZoom}
+                                className="w-full"
+                                classNames={{
+                                    track: "bg-base-700/50 border-y border-base-900",
+                                    filler: "bg-base-500 group-hover:bg-base-400 transition-colors",
+                                    thumb: "w-3 h-3 bg-base-300 hover:bg-base-200 transition-colors shadow-md rounded-full cursor-grab active:cursor-grabbing"
+                                }}
+                            />
+                            <div className="flex justify-between px-px mt-0.5">
+                                {[1,2,3,4,5].map(n => (
+                                    <span key={n} className="text-[7px] font-mono text-base-600">{n}</span>
+                                ))}
+                            </div>
+                        </div>
                     </div>
                     </div>
                 </div>
@@ -304,10 +383,10 @@ export default function Header() {
             {/* Right — actions + avatar */}
             <div className="flex items-center gap-3 flex-1 justify-end">
                 <div className="flex items-center gap-0.5">
-                    <button onClick={handleSave} className="relative text-sm font-medium px-3 py-1.5 rounded-md transition-colors w-16 text-center select-none group">
+                    <button onClick={handleOpenSave} className="relative text-sm font-medium px-3 py-1.5 rounded-md transition-colors w-16 text-center select-none group">
                         <span className={`block transition-opacity duration-200 ${saveAlert || saveError ? 'opacity-0' : 'opacity-100 text-base-400 group-hover:text-base-100 group-hover:bg-base-700/60'}`}>Save</span>
-                        <span className={`block text-emerald-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveAlert ? 'opacity-100' : 'opacity-0'}`}>Saved!</span>
-                        <span className={`block text-red-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveError ? 'opacity-100' : 'opacity-0'}`}>Failed</span>
+                        <span className={`block text-positive-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveAlert ? 'opacity-100' : 'opacity-0'}`}>Saved!</span>
+                        <span className={`block text-danger-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveError ? 'opacity-100' : 'opacity-0'}`}>Failed</span>
                     </button>
                     <button onClick={handleOpenLoad} className="text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors">Load</button>
                     {showResetConfirm ? (
@@ -315,7 +394,7 @@ export default function Header() {
                             <span className="text-xs text-base-400">Reset workspace?</span>
                             <button
                                 onClick={() => { handleClearAllTracks(); setShowResetConfirm(false); }}
-                                className="text-xs font-semibold text-red-400 hover:text-red-300 px-2 py-0.5 rounded bg-red-900/20 hover:bg-red-900/40 transition-colors"
+                                className="text-xs font-semibold text-danger-400 hover:text-danger-300 px-2 py-0.5 rounded bg-danger-900/20 hover:bg-danger-900/40 transition-colors"
                             >
                                 Reset
                             </button>
@@ -329,7 +408,7 @@ export default function Header() {
                     ) : (
                         <button
                             onClick={() => setShowResetConfirm(true)}
-                            className="text-sm text-red-500 hover:text-red-300 hover:bg-red-900/30 px-3 py-1.5 rounded-md transition-colors"
+                            className="text-sm text-danger-400 hover:text-danger-200 hover:bg-danger-900/30 px-3 py-1.5 rounded-md transition-colors"
                             title="Remove all tracks and start fresh"
                         >
                             Reset
@@ -403,58 +482,147 @@ export default function Header() {
                 </Dropdown>
             </div>
         </header>
+
         <AccountModal  isOpen={isAccountModalOpen}  onClose={() => setIsAccountModalOpen(false)} />
         <SettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} />
 
-        {/* ── Load project modal ── */}
-        {showLoadModal && (
+        {/* ── Project Slots Modal (shared for Save and Load) ── */}
+        {modalMode && (
             <div
                 className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-                onClick={() => setShowLoadModal(false)}
+                onClick={closeModal}
             >
                 <div
-                    className="bg-base-900 border border-base-700 rounded-2xl w-96 max-h-[70vh] flex flex-col shadow-2xl"
+                    className="bg-base-900 border border-base-700 rounded-2xl w-[480px] flex flex-col shadow-2xl"
+                    style={{ maxHeight: '80vh' }}
                     onClick={e => e.stopPropagation()}
                 >
+                    {/* Header */}
                     <div className="flex items-center justify-between px-5 py-4 border-b border-base-700 shrink-0">
                         <h3 className="text-sm font-bold text-base-200 flex items-center gap-2">
-                            <FolderOpen size={15} className="text-base-500" />
-                            Load Project
+                            {modalMode === 'save'
+                                ? <><Save size={15} className="text-base-500" /> Save Project</>
+                                : <><FolderOpen size={15} className="text-base-500" /> Load Project</>
+                            }
                         </h3>
-                        <button onClick={() => setShowLoadModal(false)} className="text-base-500 hover:text-base-200 p-1 rounded hover:bg-base-800 transition-colors">
+                        <button onClick={closeModal} className="text-base-500 hover:text-base-200 p-1 rounded hover:bg-base-800 transition-colors">
                             ✕
                         </button>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
-                        {loadingProjects ? (
-                            <p className="text-sm text-base-500 text-center py-8">Loading…</p>
-                        ) : loadError ? (
-                            <p className="text-sm text-red-400 text-center py-8">{loadError}</p>
-                        ) : savedProjects.length === 0 ? (
-                            <p className="text-sm text-base-500 text-center py-8">No saved projects yet.</p>
-                        ) : savedProjects.map(proj => (
-                            <div
-                                key={proj.id}
-                                role="button"
-                                tabIndex={0}
-                                onClick={() => handleLoadProject(proj.id)}
-                                onKeyDown={e => e.key === 'Enter' && handleLoadProject(proj.id)}
-                                className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-base-800 hover:bg-base-700 cursor-pointer transition-colors"
-                            >
-                                <div className="min-w-0 flex-1">
-                                    <p className="text-sm font-medium text-base-200 truncate">{proj.name}</p>
-                                    <p className="text-xs text-base-500 mt-0.5">{proj.tracks?.length ?? 0} track{proj.tracks?.length !== 1 ? 's' : ''}</p>
-                                </div>
-                                <button
-                                    onClick={e => handleDeleteProject(e, proj.id)}
-                                    title="Delete project"
-                                    className="ml-3 p-1.5 rounded-lg text-base-500 hover:text-red-400 hover:bg-base-600 transition-colors shrink-0"
-                                >
-                                    <Trash2 size={13} />
-                                </button>
-                            </div>
-                        ))}
+                    {/* Subtitle */}
+                    <p className="text-xs text-base-500 px-5 pt-3 pb-1 shrink-0">
+                        {modalMode === 'save'
+                            ? `Saving "${projectName}" — choose a slot to save or overwrite.`
+                            : 'Select a saved project to load into the workspace.'
+                        }
+                    </p>
+
+                    {/* Slot list */}
+                    <div className="flex-1 overflow-y-auto px-3 pb-3 pt-2 space-y-2 custom-scrollbar">
+                        {loadingSlots ? (
+                            <p className="text-sm text-base-500 text-center py-10">Loading…</p>
+                        ) : slotError ? (
+                            <p className="text-sm text-danger-400 text-center py-10">{slotError}</p>
+                        ) : (
+                            SLOT_IDS.map((slotId, index) => {
+                                const project = projectSlots[index];
+                                const isOccupied = !!project;
+                                const isPendingOverwrite = pendingOverwriteSlot === slotId;
+                                const isClickable = modalMode === 'save' || isOccupied;
+
+                                return (
+                                    <div
+                                        key={slotId}
+                                        className={`w-full rounded-xl border transition-colors ${
+                                            isClickable
+                                                ? isOccupied
+                                                    ? 'bg-base-800 border-base-700 hover:border-base-500 cursor-pointer'
+                                                    : 'bg-base-900 border-base-700 border-dashed hover:border-base-500 cursor-pointer'
+                                                : 'bg-base-900 border-base-800 opacity-40 cursor-not-allowed'
+                                        }`}
+                                        onClick={() => {
+                                            if (!isClickable) return;
+                                            if (modalMode === 'save') {
+                                                if (project) {
+                                                    setPendingOverwriteSlot(slotId);
+                                                } else {
+                                                    handleConfirmSave(slotId, null);
+                                                }
+                                            } else {
+                                                handleLoadFromSlot(slotId);
+                                            }
+                                        }}
+                                    >
+                                        {/* Main row */}
+                                        <div className="flex items-center gap-3 px-4 py-3">
+                                            {/* Slot number badge */}
+                                            <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 ${
+                                                isOccupied ? 'bg-base-700 text-base-300' : 'bg-base-800 text-base-600'
+                                            }`}>
+                                                {index + 1}
+                                            </div>
+
+                                            {/* Project info */}
+                                            <div className="flex-1 min-w-0">
+                                                {isOccupied ? (
+                                                    <>
+                                                        <p className="text-sm font-semibold text-base-100 truncate">{project.projectName ?? 'Untitled project'}</p>
+                                                        <p className="text-xs text-base-500 mt-0.5">
+                                                            {project.tracks?.length ?? 0} track{project.tracks?.length !== 1 ? 's' : ''}
+                                                            {project.updatedAt && <span className="ml-2 text-base-600">· {formatRelativeTime(project.updatedAt)}</span>}
+                                                        </p>
+                                                    </>
+                                                ) : (
+                                                    <p className="text-sm text-base-600 flex items-center gap-1.5">
+                                                        {modalMode === 'save' && <Plus size={12} />}
+                                                        {modalMode === 'save' ? 'Empty slot' : 'No project'}
+                                                    </p>
+                                                )}
+                                            </div>
+
+                                            {/* Delete button (occupied slots only) */}
+                                            {isOccupied && (
+                                                <button
+                                                    onClick={e => handleDeleteSlot(e, slotId)}
+                                                    title="Delete project"
+                                                    className="ml-1 p-1.5 rounded-lg text-base-600 hover:text-danger-400 hover:bg-base-700 transition-colors shrink-0"
+                                                >
+                                                    <Trash2 size={13} />
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {/* Inline overwrite confirmation (save mode only) */}
+                                        {isPendingOverwrite && modalMode === 'save' && (
+                                            <div
+                                                className="flex items-center justify-between gap-3 px-4 pb-3 pt-0"
+                                                onClick={e => e.stopPropagation()}
+                                            >
+                                                <p className="text-xs text-caution-400 font-medium truncate">
+                                                    Overwrite "{project?.projectName}"?
+                                                </p>
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    <button
+                                                        onClick={() => handleConfirmSave(slotId, project)}
+                                                        disabled={isSavingSlot}
+                                                        className="text-xs font-semibold text-positive-400 hover:text-positive-300 px-2.5 py-1 rounded-lg bg-positive-900/20 hover:bg-positive-900/40 transition-colors disabled:opacity-50"
+                                                    >
+                                                        {isSavingSlot ? 'Saving…' : 'Yes, overwrite'}
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setPendingOverwriteSlot(null)}
+                                                        className="text-xs text-base-500 hover:text-base-300 px-2.5 py-1 rounded-lg hover:bg-base-700 transition-colors"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })
+                        )}
                     </div>
                 </div>
             </div>
