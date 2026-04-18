@@ -170,7 +170,7 @@ export function AccountModal({ isOpen, onClose }) {
                 Remove photo
               </button>
             )}
-            {photoError && <p className="text-xs text-red-400">{photoError}</p>}
+            {photoError && <p className="text-xs text-danger-400">{photoError}</p>}
           </div>
 
           {/* Display Name */}
@@ -193,12 +193,12 @@ export function AccountModal({ isOpen, onClose }) {
               </button>
             </div>
             {displayNameSuccess && (
-              <p className="flex items-center gap-1.5 mt-2 text-xs text-green-400">
+              <p className="flex items-center gap-1.5 mt-2 text-xs text-positive-400">
                 <CheckCircle size={13} /> Name updated.
               </p>
             )}
             {displayNameError && (
-              <p className="flex items-center gap-1.5 mt-2 text-xs text-red-400">
+              <p className="flex items-center gap-1.5 mt-2 text-xs text-danger-400">
                 <AlertCircle size={13} /> {displayNameError}
               </p>
             )}
@@ -237,12 +237,12 @@ export function AccountModal({ isOpen, onClose }) {
                   </button>
                 </div>
                 {emailSuccess && (
-                  <p className="flex items-center gap-1.5 mt-2 text-xs text-green-400">
+                  <p className="flex items-center gap-1.5 mt-2 text-xs text-positive-400">
                     <CheckCircle size={13} /> Email updated.
                   </p>
                 )}
                 {emailError && (
-                  <p className="flex items-center gap-1.5 mt-2 text-xs text-red-400">
+                  <p className="flex items-center gap-1.5 mt-2 text-xs text-danger-400">
                     <AlertCircle size={13} /> {emailError}
                   </p>
                 )}
@@ -271,7 +271,7 @@ export function AccountModal({ isOpen, onClose }) {
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-base-400">Spotify</span>
                   <div className="flex items-center gap-2">
-                    <span className={isSpotifyConnected ? 'text-green-400' : 'text-base-500'}>
+                    <span className={isSpotifyConnected ? 'text-positive-400' : 'text-base-500'}>
                       {isSpotifyConnected ? 'Connected' : 'Not connected'}
                     </span>
                     <button
@@ -361,7 +361,7 @@ export function SettingsModal({ isOpen, onClose }) {
       onClick={() => onChange(!value)}
       className={`relative w-11 h-6 rounded-full transition-colors duration-200 shrink-0 ${value ? 'bg-base-450' : 'bg-base-700'}`}
     >
-      <span className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200 ${value ? 'translate-x-5' : 'translate-x-0'}`} />
+      <span className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-base-50 shadow transition-transform duration-200 ${value ? 'translate-x-5' : 'translate-x-0'}`} />
     </button>
   );
 
@@ -458,7 +458,7 @@ export function SettingsModal({ isOpen, onClose }) {
                 );
               })}
               {keybindConflictError && (
-                <p className="mt-2 text-xs text-red-400 flex items-center gap-1.5">
+                <p className="mt-2 text-xs text-danger-400 flex items-center gap-1.5">
                   <AlertCircle size={12} /> {keybindConflictError}
                 </p>
               )}

@@ -48,7 +48,7 @@ export default function AuthScreen() {
     if (isLoading) {
         return (
             <div className="flex flex-col h-screen w-full bg-base-900 justify-center items-center font-sans">
-                <div className="w-32 h-32 border-8 border-white/20 border-t-base-450 rounded-full animate-spin shadow-lg"></div>
+                <div className="w-32 h-32 border-8 border-base-100/20 border-t-base-450 rounded-full animate-spin shadow-lg"></div>
             </div>
         );
     }

@@ -331,35 +331,58 @@ export default function TrackCard({
     }, [title]);
 
     // Rename → Spotify re-identification for local tracks.
-    // Fires only on the true→false transition of isEditing (rename committed).
+    // prevIsEditingRef tracks the last isEditing value so we can detect true→false.
+    // editStartTitleRef captures the track title at the moment editing BEGINS — the
+    // settings-sync effect fires on every keystroke and continuously writes trackName
+    // back to context, so by commit time `title` prop already equals `trackName`.
+    // Comparing against the pre-edit snapshot is the only way to know if it changed.
     const prevIsEditingRef = useRef(false);
+    const editStartTitleRef = useRef(null);
     useEffect(() => {
         const wasEditing = prevIsEditingRef.current;
         prevIsEditingRef.current = isEditing;
-        if (!wasEditing || isEditing) return; // only on commit
+
+        if (!wasEditing && isEditing) {
+            // Editing just started — snapshot the current title before any keystrokes
+            editStartTitleRef.current = title;
+            return;
+        }
+        if (!wasEditing || isEditing) return; // only continue on true→false commit
 
         const trackData = tracks.find(t => t.id === trackId);
-        if (!trackData?.isLocal) return;
-        if (!isLoggedIn()) return;
+        console.log('[reidentify] rename committed', {
+            newTitle: trackName.trim(),
+            originalTitle: editStartTitleRef.current,
+            isLocal: trackData?.isLocal,
+            isLoggedIn: isLoggedIn(),
+        });
+        if (!trackData?.isLocal) { console.warn('[reidentify] skipped: track is not local'); return; }
+        if (!isLoggedIn()) { console.warn('[reidentify] skipped: Spotify not logged in'); return; }
 
         const newTitle = trackName.trim();
-        if (!newTitle || newTitle === title) return; // name unchanged
+        if (!newTitle || newTitle === editStartTitleRef.current) { console.warn('[reidentify] skipped: title unchanged'); return; }
 
-        const artistName = trackData.artistName || null;
+        const artistName = (trackData.artistName && trackData.artistName !== 'Local File') ? trackData.artistName : null;
         const resolvedBpm = typeof trackData.bpm === 'number' ? trackData.bpm : null;
         const resolvedKey = typeof trackData.trackKey === 'string' && trackData.trackKey !== '[key]' ? trackData.trackKey : null;
 
+        console.log('[reidentify] searching Spotify for:', newTitle, '| artist:', artistName);
         setIsReidentifying(true);
         (async () => {
             try {
                 const query = buildSpotifyQuery(newTitle, artistName);
                 const results = await searchSpotify(query, ['track'], 5);
-                let match = spotifyConfirmMatch(newTitle, results?.tracks?.items);
-                if (!match && results?.tracks?.items?.length) {
+                const items = results?.tracks?.items;
+                console.log('[reidentify] Spotify returned', items?.length ?? 0, 'candidates');
+                let match = spotifyConfirmMatch(newTitle, items);
+                if (match) {
+                    console.log('[reidentify] trigram matched:', match.name, '-', match.artists?.map(a => a.name).join(', '));
+                } else if (items?.length) {
+                    console.log('[reidentify] trigram failed, calling LLM with candidates:', items.map(t => t.name));
                     const body = {
                         title: newTitle,
                         artist: artistName,
-                        candidates: results.tracks.items.slice(0, 5).map(t => ({
+                        candidates: items.slice(0, 5).map(t => ({
                             id: t.id, name: t.name, artists: t.artists,
                             album: { images: t.album?.images },
                         })),
@@ -373,16 +396,22 @@ export default function TrackCard({
                     });
                     if (llmRes.ok) {
                         const { result } = await llmRes.json();
-                        if (result?.index != null) match = results.tracks.items[result.index];
+                        console.log('[reidentify] LLM returned index:', result?.index);
+                        if (result?.index != null) match = items[result.index];
                     }
+                } else {
+                    console.warn('[reidentify] no Spotify candidates returned');
                 }
                 if (match) {
+                    console.log('[reidentify] ✓ updating track with:', match.artists?.map(a => a.name).join(', '));
                     handleUpdateTrack(trackId, {
                         artistName: match.artists?.map(a => a.name).join(', ') || artistName,
                         albumArt: match.album?.images?.[0]?.url || null,
                     }, true);
+                } else {
+                    console.warn('[reidentify] no match found, track unchanged');
                 }
-            } catch { /* best-effort */ }
+            } catch (err) { console.error('[reidentify] error:', err); }
             finally { setIsReidentifying(false); }
         })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1529,18 +1558,18 @@ export default function TrackCard({
                             onChange={(e) => setTrackName(e.target.value)}
                             disabled={!isEditing}
                             style={{ width: getDynamicInputWidth(trackName, 7), maxWidth: '20ch' }}
-                            className={`text-base-50 font-semibold px-1 py-1 rounded outline-none transition-colors cursor-text text-lg text-ellipsis overflow-hidden ${isEditing ? (isDuplicateName ? 'bg-red-900/30 ring-1 ring-red-500/60' : 'bg-base-900') : 'bg-transparent'}`}
+                            className={`text-base-50 font-semibold px-1 py-1 rounded outline-none transition-colors cursor-text text-lg text-ellipsis overflow-hidden ${isEditing ? (isDuplicateName ? 'bg-danger-900/30 ring-1 ring-danger-500/60' : 'bg-base-900') : 'bg-transparent'}`}
                             onKeyDown={(e) => { if (e.key === 'Enter' && !isDuplicateName) { setTrackName(t => t.trim()); setIsEditing(false); } }}
                         />
                         <button
                             onClick={() => { if (!isDuplicateName) { setTrackName(t => t.trim()); setIsEditing(e => !e); } }}
-                            className={`transition-colors p-1 rounded border ${isEditing ? (isDuplicateName ? 'bg-red-900/30 text-red-400 border-red-500/60 cursor-not-allowed' : 'bg-base-900 text-base-50 border-base-500') : 'bg-transparent border-transparent text-base-300 hover:text-base-50 hover:border-base-400'}`}
+                            className={`transition-colors p-1 rounded border ${isEditing ? (isDuplicateName ? 'bg-danger-900/30 text-danger-400 border-danger-500/60 cursor-not-allowed' : 'bg-base-900 text-base-50 border-base-500') : 'bg-transparent border-transparent text-base-300 hover:text-base-50 hover:border-base-400'}`}
                             title={isDuplicateName ? 'Track name already in use' : 'Rename track'}
                         >
                             <Pencil size={16} />
                         </button>
                         {isEditing && isDuplicateName && (
-                            <span className="text-xs font-medium text-red-400 whitespace-nowrap truncate shrink-0">Name already in use</span>
+                            <span className="text-xs font-medium text-danger-400 whitespace-nowrap truncate shrink-0">Name already in use</span>
                         )}
                         {isReidentifying && (
                             <Loader2 size={13} className="animate-spin text-base-400 shrink-0" title="Finding on Spotify…" />
@@ -1575,7 +1604,7 @@ export default function TrackCard({
                                 <>
                                     <div className="w-1 h-1 shrink-0 rounded-full bg-base-600 hidden xs:block"></div>
                                     <div
-                                        className="flex items-center gap-1 text-[11px] text-amber-400/80"
+                                        className="flex items-center gap-1 text-[11px] text-caution-400/80"
                                         title={`Track is at ≈${effectiveBpm} BPM — Sync or Sync All will set speed to match Master BPM (${masterBpm})`}
                                         onClick={(e) => e.stopPropagation()}
                                     >
@@ -1640,12 +1669,12 @@ export default function TrackCard({
                 </div>
 
                 {isMissing && !missingDismissed && (
-                    <div className="flex items-start gap-2 mt-3 px-3 py-2 rounded border border-red-500/30 bg-red-500/10" onClick={(e) => e.stopPropagation()}>
-                        <AlertTriangle size={13} className="text-red-400 shrink-0 mt-px" />
-                        <span className="text-[11px] text-red-300 leading-snug flex-1">File missing from imports. Re-upload the exact file to restore.</span>
+                    <div className="flex items-start gap-2 mt-3 px-3 py-2 rounded border border-danger-500/30 bg-danger-500/10" onClick={(e) => e.stopPropagation()}>
+                        <AlertTriangle size={13} className="text-danger-400 shrink-0 mt-px" />
+                        <span className="text-[11px] text-danger-300 leading-snug flex-1">File missing from imports. Re-upload the exact file to restore.</span>
                         <button
                             onClick={() => setMissingDismissed(true)}
-                            className="text-red-500 hover:text-red-200 transition-colors shrink-0"
+                            className="text-danger-500 hover:text-danger-200 transition-colors shrink-0"
                             title="Dismiss"
                         >
                             <X size={13} />
@@ -1697,7 +1726,7 @@ export default function TrackCard({
                                     !isVisible
                                         ? 'bg-base-900 text-base-700 border-base-800 cursor-not-allowed'
                                         : isMuted
-                                            ? 'bg-yellow-500 text-black border-yellow-400 shadow-[0_0_8px_rgba(234,179,8,0.5)]'
+                                            ? 'bg-mark text-mark-fg border-mark-border shadow-mark'
                                             : 'bg-base-900 text-base-300 border-base-700 hover:text-base-50 hover:border-base-500'
                                 }`}
                             >
@@ -1800,7 +1829,7 @@ export default function TrackCard({
 
                     {/* Right column (Timeline Lane) — fixed-width TIMELINE reference. All clips share this same lane width.
                          Shorter tracks occupy a proportional slice with trailing whitespace (DAW-style). */}
-                    <div ref={laneRef} className="flex flex-col flex-1 min-w-0 bg-[#0F111A] border-l border-base-700/50 shadow-inner relative overflow-hidden">
+                    <div ref={laneRef} className="flex flex-col flex-1 min-w-0 bg-lane-bg border-l border-base-700/50 shadow-inner relative overflow-hidden">
                         {/* Scrollable viewport — wheel events change zoom (preventDefault stops browser scroll).
                              scrollLeft is set programmatically to follow the playhead on zoom changes. */}
                         <div
@@ -1848,7 +1877,7 @@ export default function TrackCard({
                                                     {beatPositions.map((t, i) => (
                                                         <div
                                                             key={`beat-${i}`}
-                                                            className="absolute top-0 bottom-0 w-px bg-[#59546C]"
+                                                            className="absolute top-0 bottom-0 w-px bg-base-700"
                                                             style={{ left: `${(t / audioDuration) * 100}%` }}
                                                         />
                                                     ))}
@@ -1877,8 +1906,8 @@ export default function TrackCard({
                                                     key={`hl-${seg.id}`}
                                                     className={`absolute top-0 bottom-0 pointer-events-auto rounded-sm z-[3]
                                                         ${seg.isDeleted ? '' : 'cursor-pointer'}
-                                                        ${isActive && !seg.isDeleted && !seg.isMuted ? 'border-2 border-orange-400/80'
-                                                            : !seg.isDeleted && !seg.isMuted ? 'border border-white/20'
+                                                        ${isActive && !seg.isDeleted && !seg.isMuted ? 'border-2 border-base-450/80'
+                                                            : !seg.isDeleted && !seg.isMuted ? 'border border-base-100/20'
                                                             : ''}
                                                         ${seg.isDeleted ? 'bg-base-900/95 border-y-2 border-dashed border-base-600 shadow-[inset_0_0_20px_rgba(0,0,0,0.5)]'
                                                             : seg.isMuted ? 'bg-black/60 grayscale backdrop-brightness-50'
@@ -1893,7 +1922,7 @@ export default function TrackCard({
 
                                 {/* Segment strip — always fills clip width (100%). Canvas has no horizontal overflow. */}
                                 {audioUrl && segments.length > 0 && (
-                                    <div className="flex items-stretch border-t border-base-700/50 bg-[#0a0b10] shrink-0"
+                                    <div className="flex items-stretch border-t border-base-700/50 bg-lane-strip shrink-0"
                                         style={{ width: '100%', minWidth: '100%', height: 32 }}>
                                         {segments.map((seg, idx) => {
                                             const canLeft  = idx > 0 && segments.length > 1;
@@ -1985,7 +2014,7 @@ export default function TrackCard({
                             </div>
                         )}
 
-                        <span className="text-[10px] font-mono text-white tabular-nums select-none ml-auto">
+                        <span className="text-[10px] font-mono text-base-50 tabular-nums select-none ml-auto">
                             {formatTimestamp(displayTimeSec)} / {formatTimestamp((audioDuration || 0) + (offsetSec || 0))}
                         </span>
                     </div>
@@ -2143,7 +2172,7 @@ export default function TrackCard({
                                      value changes. Each card tracks dismissal independently. */}
                                 {!g6Dismissed && (Math.abs(pitch) > 3 || parseFloat(speed) < 0.85 || parseFloat(speed) > 1.15) && (
                                     <div className="flex items-center gap-2 bg-base-800 border border-base-400/60 rounded-lg px-3 py-2 mt-4" onClick={(e) => e.stopPropagation()}>
-                                        <AlertTriangle size={11} className="text-amber-400/80 shrink-0" />
+                                        <AlertTriangle size={11} className="text-caution-400/80 shrink-0" />
                                         <span className="text-[10px] text-base-300 leading-snug flex-1">
                                             Audible artefacts may occur at this setting:{' '}
                                             <span className="text-base-200 font-medium">
@@ -2164,13 +2193,13 @@ export default function TrackCard({
                                 )}
 
                                 {audioDropped && (
-                                    <div className="flex items-center gap-2 bg-orange-900/20 border border-orange-500/30 rounded-lg px-3 py-2 mt-4" onClick={(e) => e.stopPropagation()}>
-                                        <AlertTriangle className="text-orange-400 mt-0.5 shrink-0" size={16} />
+                                    <div className="flex items-center gap-2 bg-caution-900/20 border border-caution-500/30 rounded-lg px-3 py-2 mt-4" onClick={(e) => e.stopPropagation()}>
+                                        <AlertTriangle className="text-caution-400 mt-0.5 shrink-0" size={16} />
                                         <div className="flex-1">
-                                            <p className="text-xs text-orange-300 font-medium leading-relaxed">Audio Processing Drop</p>
-                                            <p className="text-[10px] text-orange-400/80 mt-1">High CPU load caused an audio buffer underrun. The audio may stutter or drop briefly.</p>
+                                            <p className="text-xs text-caution-300 font-medium leading-relaxed">Audio Processing Drop</p>
+                                            <p className="text-[10px] text-caution-400/80 mt-1">High CPU load caused an audio buffer underrun. The audio may stutter or drop briefly.</p>
                                         </div>
-                                        <button onClick={(e) => { e.stopPropagation(); setAudioDropped(false); }} className="text-orange-500 hover:text-orange-300 p-1" title="Dismiss">
+                                        <button onClick={(e) => { e.stopPropagation(); setAudioDropped(false); }} className="text-caution-500 hover:text-caution-300 p-1" title="Dismiss">
                                             <X size={14} />
                                         </button>
                                     </div>

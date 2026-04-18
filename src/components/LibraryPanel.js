@@ -260,10 +260,16 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                     }
                 } else if (upload.title) {
                     // Field-filtered search for precision when title (and optionally artist) are known
+                    console.log('[library:enrich] searching Spotify for:', upload.title, '| artist:', upload.artistName);
                     const spQuery = buildSpotifyQuery(upload.title, upload.artistName);
                     const results = await searchSpotify(spQuery, ['track'], 5);
-                    let match = spotifyConfirmMatch(upload.title, results?.tracks?.items);
-                    if (!match && results?.tracks?.items?.length) {
+                    const items = results?.tracks?.items;
+                    console.log('[library:enrich] Spotify returned', items?.length ?? 0, 'candidates');
+                    let match = spotifyConfirmMatch(upload.title, items);
+                    if (match) {
+                        console.log('[library:enrich] trigram matched:', match.name, '-', match.artists?.map(a => a.name).join(', '));
+                    } else if (items?.length) {
+                        console.log('[library:enrich] trigram failed, calling LLM with candidates:', items.map(t => t.name));
                         try {
                             const llmRes = await fetch('/api/findSpotifyTrack', {
                                 method: 'POST',
@@ -271,7 +277,7 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                                 body: JSON.stringify({
                                     title: upload.title,
                                     artist: upload.artistName || null,
-                                    candidates: results.tracks.items.slice(0, 5).map(t => ({
+                                    candidates: items.slice(0, 5).map(t => ({
                                         id: t.id,
                                         name: t.name,
                                         artists: t.artists,
@@ -281,23 +287,28 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                             });
                             if (llmRes.ok) {
                                 const { result } = await llmRes.json();
+                                console.log('[library:enrich] LLM returned index:', result?.index);
                                 if (result?.index != null) {
-                                    match = results.tracks.items[result.index];
-                                    // Persist resolved Spotify ID so future adds skip this lookup
+                                    match = items[result.index];
+                                    console.log('[library:enrich] ✓ LLM matched:', match.name, '-', match.artists?.map(a => a.name).join(', '));
                                     if (upload.id && match?.id) {
                                         updateDoc(doc(db, 'users', currentUser.uid, 'uploads', upload.id),
                                             { spotifyTrackId: match.id }).catch(() => {});
                                     }
+                                } else {
+                                    console.warn('[library:enrich] LLM returned null — no confident match');
                                 }
                             }
-                        } catch { /* best-effort */ }
+                        } catch (err) { console.error('[library:enrich] LLM fallback error:', err); }
+                    } else {
+                        console.warn('[library:enrich] no Spotify candidates returned for:', upload.title);
                     }
                     if (match) {
                         artistName = match.artists?.map(a => a.name).join(', ') || artistName;
                         albumArt   = match.album?.images?.[0]?.url || albumArt;
                     }
                 }
-            } catch { /* best-effort */ }
+            } catch (err) { console.error('[library:enrich] outer error:', err); }
         }
 
         handleAddTrack({
@@ -382,9 +393,9 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                     <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar flex flex-col">
                         <div className="flex flex-col mb-4">
                             <div className="flex items-center justify-center gap-2 mb-2 px-1">
-                                <div className="flex-1 h-px bg-white/40" />
+                                <div className="flex-1 h-px bg-base-200/40" />
                                 <span className="text-[10px] uppercase tracking-widest text-base-450 font-bold text-center whitespace-nowrap">YOUR FILES</span>
-                                <div className="flex-1 h-px bg-white/40" />
+                                <div className="flex-1 h-px bg-base-200/40" />
                             </div>
                             <input 
                                 type="file" 
@@ -393,27 +404,27 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                                 style={{ display: 'none' }} 
                                 onChange={handleFileUpload} 
                             />
-                            <Button onPress={() => !uploadingFiles && fileInputRef.current?.click()} disabled={!currentUser} radius="full" fullWidth variant="solid" className="mb-2 p-0 h-10 font-bold text-white bg-base-450 hover:bg-base-450/80">
+                            <Button onPress={() => !uploadingFiles && fileInputRef.current?.click()} disabled={!currentUser} radius="full" fullWidth variant="solid" className="mb-2 p-0 h-10 font-bold text-base-50 bg-base-450 hover:bg-base-450/80">
                                 {uploadingFiles ? (
                                     <div className="flex flex-row items-center justify-center gap-2 w-full h-full">
-                                        <Loader2 size={16} className="text-white shrink-0 animate-spin" />
+                                        <Loader2 size={16} className="text-base-50 shrink-0 animate-spin" />
                                         <span>Uploading...</span>
                                     </div>
                                 ) : (
                                     <div className="flex flex-row items-center justify-center gap-2 w-full h-full">
-                                        <Upload size={16} className="text-white shrink-0" />
+                                        <Upload size={16} className="text-base-50 shrink-0" />
                                         <span>Upload MP3</span>
                                     </div>
                                 )}
                             </Button>
 
                             {currentUser && !uploadTipDismissed && (
-                                <div className="flex items-center gap-1.5 mt-1 mb-1 px-1.5 py-1.5 bg-red-950/25 border border-red-800/35 rounded-lg">
-                                    <AlertTriangle size={11} className="text-red-400 shrink-0" />
-                                    <span className="text-[10px] text-red-300/90 leading-snug flex-1">Only upload files you own or have rights to use. Uploading copyrighted material without permission may violate applicable laws.</span>
+                                <div className="flex items-center gap-1.5 mt-1 mb-1 px-1.5 py-1.5 bg-caution-900/25 border border-caution-700/35 rounded-lg">
+                                    <AlertTriangle size={11} className="text-caution-400 shrink-0" />
+                                    <span className="text-[10px] text-caution-300/90 leading-snug flex-1">Only upload files you own or have rights to use. Uploading copyrighted material without permission may violate applicable laws.</span>
                                     <button
                                         onClick={() => setUploadTipDismissed(true)}
-                                        className="text-red-600 hover:text-red-400 transition-colors shrink-0"
+                                        className="text-caution-600 hover:text-caution-400 transition-colors shrink-0"
                                         title="Dismiss"
                                     >
                                         <X size={10} />
@@ -422,12 +433,12 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                             )}
 
                             {uploadError && (
-                                <div className="flex items-start gap-1.5 mt-1 mb-1 px-1.5 py-1.5 bg-red-950/30 border border-red-800/40 rounded-lg">
-                                    <AlertCircle size={11} className="text-red-400 shrink-0 mt-0.5" />
-                                    <span className="text-[10px] text-red-300/90 leading-snug flex-1">{uploadError}</span>
+                                <div className="flex items-start gap-1.5 mt-1 mb-1 px-1.5 py-1.5 bg-danger-950/30 border border-danger-700/40 rounded-lg">
+                                    <AlertCircle size={11} className="text-danger-400 shrink-0 mt-0.5" />
+                                    <span className="text-[10px] text-danger-300/90 leading-snug flex-1">{uploadError}</span>
                                     <button
                                         onClick={() => setUploadError(null)}
-                                        className="text-red-600 hover:text-red-400 transition-colors shrink-0"
+                                        className="text-danger-600 hover:text-danger-400 transition-colors shrink-0"
                                         title="Dismiss"
                                     >
                                         <X size={10} />
@@ -436,12 +447,12 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                             )}
 
                             {deleteError && (
-                                <div className="flex items-start gap-1.5 mt-1 mb-1 px-1.5 py-1.5 bg-red-950/30 border border-red-800/40 rounded-lg">
-                                    <AlertCircle size={11} className="text-red-400 shrink-0 mt-0.5" />
-                                    <span className="text-[10px] text-red-300/90 leading-snug flex-1">{deleteError}</span>
+                                <div className="flex items-start gap-1.5 mt-1 mb-1 px-1.5 py-1.5 bg-danger-950/30 border border-danger-700/40 rounded-lg">
+                                    <AlertCircle size={11} className="text-danger-400 shrink-0 mt-0.5" />
+                                    <span className="text-[10px] text-danger-300/90 leading-snug flex-1">{deleteError}</span>
                                     <button
                                         onClick={() => setDeleteError(null)}
-                                        className="text-red-600 hover:text-red-400 transition-colors shrink-0"
+                                        className="text-danger-600 hover:text-danger-400 transition-colors shrink-0"
                                         title="Dismiss"
                                     >
                                         <X size={10} />
@@ -473,7 +484,7 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                                             </div>
                                             <button 
                                                 onClick={(e) => handleDeleteUpload(e, upload)}
-                                                className="p-1.5 text-base-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all rounded hover:bg-base-700"
+                                                className="p-1.5 text-base-500 hover:text-danger-400 opacity-0 group-hover:opacity-100 transition-all rounded hover:bg-base-700"
                                                 title="Delete file"
                                             >
                                                 <Trash2 size={14} />
@@ -485,9 +496,9 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                         </div>
 
                         <div className="flex items-center justify-center gap-2 my-2 mt-1 mb-5 px-1">
-                            <div className="flex-1 h-px bg-white/40" />
+                            <div className="flex-1 h-px bg-base-200/40" />
                             <span className="text-[10px] uppercase tracking-widest text-base-450 font-bold text-center whitespace-nowrap">SPOTIFY CATALOG</span>
-                            <div className="flex-1 h-px bg-white/40" />
+                            <div className="flex-1 h-px bg-base-200/40" />
                         </div>
 
                         <div className="flex flex-col">
@@ -495,10 +506,10 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                                 <div className="flex flex-col mt-1">
                                     {isConnecting ? (
                                         <div className="flex justify-center items-center h-10 mb-2">
-                                            <div className="w-6 h-6 border-2 border-white/20 border-t-base-450 rounded-full animate-spin"></div>
+                                            <div className="w-6 h-6 border-2 border-base-100/20 border-t-base-450 rounded-full animate-spin"></div>
                                         </div>
                                     ) : (
-                                        <Button onPress={connectSpotify} radius="full" fullWidth variant="solid" className="mb-2 p-0 h-10 font-bold text-white bg-base-450 hover:bg-base-450/80">
+                                        <Button onPress={connectSpotify} radius="full" fullWidth variant="solid" className="mb-2 p-0 h-10 font-bold text-base-50 bg-base-450 hover:bg-base-450/80">
                                             <div className="flex flex-row items-center justify-center gap-2 w-full h-full">
                                                 <SpotifyIcon />
                                                 <span>Connect Spotify</span>
@@ -518,7 +529,7 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                                             value={searchQuery}
                                             onChange={(e) => setSearchQuery(e.target.value)}
                                             placeholder="Search Library..."
-                                            className="w-full bg-transparent px-2 py-2 text-[13px] font-medium text-white placeholder:text-white/70 border-none outline-none shadow-none focus:ring-0"
+                                            className="w-full bg-transparent px-2 py-2 text-[13px] font-medium text-base-50 placeholder:text-base-50/70 border-none outline-none shadow-none focus:ring-0"
                                         />
                                         {searchQuery && (
                                             <button onClick={() => setSearchQuery('')} className="pr-3 text-base-450 hover:text-base-200 transition-colors">
@@ -535,7 +546,7 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                                                     <span className="text-[11px] font-medium">Searching...</span>
                                                 </div>
                                             ) : searchError ? (
-                                                <div className="p-3 bg-red-900/20 border border-red-500/30 rounded text-xs text-red-400 flex flex-col gap-2">
+                                                <div className="p-3 bg-danger-900/20 border border-danger-500/30 rounded text-xs text-danger-400 flex flex-col gap-2">
                                                     <span className="flex items-center gap-1 font-semibold"><AlertCircle size={14} /> Search Failed</span>
                                                     <span>{searchError}</span>
                                                 </div>
@@ -572,7 +583,7 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                                                     <div key={i} className="h-12 bg-base-800 rounded animate-pulse opacity-50"></div>
                                                 ))
                                             ) : error ? (
-                                                <div className="p-3 bg-red-900/20 border border-red-500/30 rounded text-xs text-red-400 flex flex-col gap-2">
+                                                <div className="p-3 bg-danger-900/20 border border-danger-500/30 rounded text-xs text-danger-400 flex flex-col gap-2">
                                                     <span className="flex items-center gap-1 font-semibold"><AlertCircle size={14} /> Error Loading</span>
                                                     <span>{error}</span>
                                                 </div>
@@ -603,7 +614,7 @@ export default function LibraryPanel({ isCollapsed, setIsCollapsed }) {
                                         )}
                                     </div>
 
-                                    <Button onPress={disconnectSpotify} radius="full" fullWidth variant="solid" className="mt-4 mb-2 p-0 h-10 font-bold text-white bg-base-450 hover:bg-base-450/80">
+                                    <Button onPress={disconnectSpotify} radius="full" fullWidth variant="solid" className="mt-4 mb-2 p-0 h-10 font-bold text-base-50 bg-base-450 hover:bg-base-450/80">
                                         <div className="flex flex-row items-center justify-center gap-2 w-full h-full">
                                             <SpotifyIcon />
                                             <span>Disconnect Spotify</span>

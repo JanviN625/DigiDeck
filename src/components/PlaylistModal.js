@@ -70,8 +70,8 @@ export default function PlaylistModal({ isOpen, onClose, playlist }) {
                             <span className="text-sm font-medium">Loading tracks...</span>
                         </div>
                     ) : error ? (
-                        <div className="flex flex-col items-center justify-center h-full text-red-400 gap-3 py-20 px-8 text-center">
-                            <AlertCircle size={48} className="text-red-500/50 mb-2" />
+                        <div className="flex flex-col items-center justify-center h-full text-danger-400 gap-3 py-20 px-8 text-center">
+                            <AlertCircle size={48} className="text-danger-500/50 mb-2" />
                             <span className="text-lg font-bold">Failed to Load Tracks</span>
                             <span className="text-sm opacity-80">{error}</span>
                         </div>

@@ -385,8 +385,8 @@ export default function Header() {
                 <div className="flex items-center gap-0.5">
                     <button onClick={handleOpenSave} className="relative text-sm font-medium px-3 py-1.5 rounded-md transition-colors w-16 text-center select-none group">
                         <span className={`block transition-opacity duration-200 ${saveAlert || saveError ? 'opacity-0' : 'opacity-100 text-base-400 group-hover:text-base-100 group-hover:bg-base-700/60'}`}>Save</span>
-                        <span className={`block text-emerald-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveAlert ? 'opacity-100' : 'opacity-0'}`}>Saved!</span>
-                        <span className={`block text-red-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveError ? 'opacity-100' : 'opacity-0'}`}>Failed</span>
+                        <span className={`block text-positive-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveAlert ? 'opacity-100' : 'opacity-0'}`}>Saved!</span>
+                        <span className={`block text-danger-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveError ? 'opacity-100' : 'opacity-0'}`}>Failed</span>
                     </button>
                     <button onClick={handleOpenLoad} className="text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors">Load</button>
                     {showResetConfirm ? (
@@ -394,7 +394,7 @@ export default function Header() {
                             <span className="text-xs text-base-400">Reset workspace?</span>
                             <button
                                 onClick={() => { handleClearAllTracks(); setShowResetConfirm(false); }}
-                                className="text-xs font-semibold text-red-400 hover:text-red-300 px-2 py-0.5 rounded bg-red-900/20 hover:bg-red-900/40 transition-colors"
+                                className="text-xs font-semibold text-danger-400 hover:text-danger-300 px-2 py-0.5 rounded bg-danger-900/20 hover:bg-danger-900/40 transition-colors"
                             >
                                 Reset
                             </button>
@@ -408,7 +408,7 @@ export default function Header() {
                     ) : (
                         <button
                             onClick={() => setShowResetConfirm(true)}
-                            className="text-sm text-red-500 hover:text-red-300 hover:bg-red-900/30 px-3 py-1.5 rounded-md transition-colors"
+                            className="text-sm text-danger-400 hover:text-danger-200 hover:bg-danger-900/30 px-3 py-1.5 rounded-md transition-colors"
                             title="Remove all tracks and start fresh"
                         >
                             Reset
@@ -523,7 +523,7 @@ export default function Header() {
                         {loadingSlots ? (
                             <p className="text-sm text-base-500 text-center py-10">Loading…</p>
                         ) : slotError ? (
-                            <p className="text-sm text-red-400 text-center py-10">{slotError}</p>
+                            <p className="text-sm text-danger-400 text-center py-10">{slotError}</p>
                         ) : (
                             SLOT_IDS.map((slotId, index) => {
                                 const project = projectSlots[index];
@@ -586,7 +586,7 @@ export default function Header() {
                                                 <button
                                                     onClick={e => handleDeleteSlot(e, slotId)}
                                                     title="Delete project"
-                                                    className="ml-1 p-1.5 rounded-lg text-base-600 hover:text-red-400 hover:bg-base-700 transition-colors shrink-0"
+                                                    className="ml-1 p-1.5 rounded-lg text-base-600 hover:text-danger-400 hover:bg-base-700 transition-colors shrink-0"
                                                 >
                                                     <Trash2 size={13} />
                                                 </button>
@@ -599,14 +599,14 @@ export default function Header() {
                                                 className="flex items-center justify-between gap-3 px-4 pb-3 pt-0"
                                                 onClick={e => e.stopPropagation()}
                                             >
-                                                <p className="text-xs text-amber-400 font-medium truncate">
+                                                <p className="text-xs text-caution-400 font-medium truncate">
                                                     Overwrite "{project?.projectName}"?
                                                 </p>
                                                 <div className="flex items-center gap-2 shrink-0">
                                                     <button
                                                         onClick={() => handleConfirmSave(slotId, project)}
                                                         disabled={isSavingSlot}
-                                                        className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 px-2.5 py-1 rounded-lg bg-emerald-900/20 hover:bg-emerald-900/40 transition-colors disabled:opacity-50"
+                                                        className="text-xs font-semibold text-positive-400 hover:text-positive-300 px-2.5 py-1 rounded-lg bg-positive-900/20 hover:bg-positive-900/40 transition-colors disabled:opacity-50"
                                                     >
                                                         {isSavingSlot ? 'Saving…' : 'Yes, overwrite'}
                                                     </button>

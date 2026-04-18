@@ -31,6 +31,7 @@ jest.mock('firebase/firestore', () => ({
     orderBy: jest.fn(() => 'orderBy_createdAt'),
     deleteDoc: jest.fn(),
     doc: jest.fn((_db, ...path) => path.join('/')),
+    updateDoc: jest.fn(),
 }));
 
 jest.mock('firebase/storage', () => ({
@@ -44,6 +45,7 @@ jest.mock('../utils/helpers', () => ({
     readId3Tags: jest.fn().mockResolvedValue({ title: null, artist: null, albumArtBlob: null }),
     spotifyConfirmMatch: jest.fn(() => null),
     getDynamicInputWidth: jest.fn(() => 100),
+    buildSpotifyQuery: jest.fn(),
 }));
 
 jest.mock('@heroui/react', () => ({
@@ -58,6 +60,7 @@ jest.mock('@heroui/react', () => ({
 
 const mockGetUserPlaylists = jest.fn();
 const mockSearchSpotify = jest.fn();
+const mockGetSpotifyTrack = jest.fn();
 let mockGetPlaylistTracks;
 const mockHandleAddTrack = jest.fn();
 const mockHandleUpdateTrack = jest.fn();
@@ -89,6 +92,7 @@ const setupMocks = (overrides = {}) => {
         getUserPlaylists: mockGetUserPlaylists,
         searchSpotify: mockSearchSpotify,
         getPlaylistTracks: mockGetPlaylistTracks,
+        getSpotifyTrack: mockGetSpotifyTrack,
     });
 
     useMix.mockReturnValue({
@@ -482,6 +486,163 @@ describe('LibraryPanel — file upload', () => { // [FR-016] [FR-021] [FR-022]
                 'track_abc',
                 { isMissing: false, audioUrl: 'https://cdn.example/found.mp3' }
             )
+        );
+    });
+});
+
+// ─── handleInsertUpload — Spotify enrichment ──────────────────────────────────
+
+describe('LibraryPanel — handleInsertUpload Spotify enrichment', () => { // [FR-021]
+    const candidateTrack = {
+        id: 'sp123',
+        name: 'Test Song',
+        artists: [{ name: 'Test Artist' }],
+        album: { images: [{ url: 'http://art.jpg' }] },
+    };
+
+    const singleUpload = {
+        id: 'up_enrich',
+        data: () => ({
+            title: 'Test Song',
+            artistName: null,
+            downloadUrl: 'https://cdn.example/test.mp3',
+        }),
+    };
+
+    beforeEach(() => {
+        setupMocks({ spotify: { isSpotifyConnected: true } });
+        const { buildSpotifyQuery, spotifyConfirmMatch } = require('../utils/helpers');
+        buildSpotifyQuery.mockImplementation((title, artist) =>
+            title && artist ? `track:${title} artist:${artist}` : title || ''
+        );
+        spotifyConfirmMatch.mockReturnValue(null); // default: trigram fails
+        mockSearchSpotify.mockResolvedValue({ tracks: { items: [candidateTrack] } });
+    });
+
+    afterEach(() => { delete global.fetch; });
+
+    const renderWithUpload = async (uploadOverride) => {
+        const upload = uploadOverride ?? singleUpload;
+        render(<LibraryPanel />);
+        await act(async () => { capturedAuthCb(mockUser); });
+        await act(async () => {
+            capturedSnapshotCb({ forEach: (cb) => cb(upload) });
+        });
+    };
+
+    it('uses trigram match artist and albumArt when spotifyConfirmMatch succeeds', async () => {
+        const { spotifyConfirmMatch } = require('../utils/helpers');
+        spotifyConfirmMatch.mockReturnValue(candidateTrack);
+
+        await renderWithUpload();
+        fireEvent.click(screen.getByTitle('Add to Workspace'));
+        await waitFor(() => expect(mockHandleAddTrack).toHaveBeenCalled());
+
+        expect(mockHandleAddTrack).toHaveBeenCalledWith(
+            expect.objectContaining({ artistName: 'Test Artist', albumArt: 'http://art.jpg' })
+        );
+    });
+
+    it('falls back to LLM and enriches when trigram fails but LLM returns a valid index', async () => {
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: () => Promise.resolve({ result: { index: 0 } }),
+        });
+
+        await renderWithUpload();
+        fireEvent.click(screen.getByTitle('Add to Workspace'));
+        await waitFor(() => expect(mockHandleAddTrack).toHaveBeenCalled());
+
+        expect(mockHandleAddTrack).toHaveBeenCalledWith(
+            expect.objectContaining({ artistName: 'Test Artist', albumArt: 'http://art.jpg' })
+        );
+    });
+
+    it('persists spotifyTrackId to Firestore when LLM match succeeds', async () => {
+        const { updateDoc } = require('firebase/firestore');
+        updateDoc.mockResolvedValue();
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: () => Promise.resolve({ result: { index: 0 } }),
+        });
+
+        await renderWithUpload();
+        fireEvent.click(screen.getByTitle('Add to Workspace'));
+        await waitFor(() => expect(updateDoc).toHaveBeenCalled());
+
+        expect(updateDoc).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({ spotifyTrackId: 'sp123' })
+        );
+    });
+
+    it('does not enrich when LLM returns null index', async () => {
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true,
+            json: () => Promise.resolve({ result: { index: null } }),
+        });
+
+        await renderWithUpload();
+        fireEvent.click(screen.getByTitle('Add to Workspace'));
+        await waitFor(() => expect(mockHandleAddTrack).toHaveBeenCalled());
+
+        expect(mockHandleAddTrack).toHaveBeenCalledWith(
+            expect.objectContaining({ artistName: 'Local File' })
+        );
+    });
+
+    it('does not call LLM when Spotify returns no candidates', async () => {
+        mockSearchSpotify.mockResolvedValue({ tracks: { items: [] } });
+        global.fetch = jest.fn();
+
+        await renderWithUpload();
+        fireEvent.click(screen.getByTitle('Add to Workspace'));
+        await waitFor(() => expect(mockHandleAddTrack).toHaveBeenCalled());
+
+        expect(global.fetch).not.toHaveBeenCalled();
+        expect(mockHandleAddTrack).toHaveBeenCalledWith(
+            expect.objectContaining({ artistName: 'Local File' })
+        );
+    });
+
+    it('uses getSpotifyTrack directly when upload already has a spotifyTrackId', async () => {
+        mockGetSpotifyTrack.mockResolvedValue({
+            artists: [{ name: 'Direct Artist' }],
+            album: { images: [{ url: 'http://direct-art.jpg' }] },
+        });
+
+        const uploadWithId = {
+            id: 'up_direct',
+            data: () => ({
+                title: 'Test Song',
+                artistName: null,
+                downloadUrl: 'https://cdn.example/test.mp3',
+                spotifyTrackId: 'sp_abc',
+            }),
+        };
+
+        await renderWithUpload(uploadWithId);
+        fireEvent.click(screen.getByTitle('Add to Workspace'));
+        await waitFor(() => expect(mockHandleAddTrack).toHaveBeenCalled());
+
+        expect(mockGetSpotifyTrack).toHaveBeenCalledWith('sp_abc');
+        expect(mockHandleAddTrack).toHaveBeenCalledWith(
+            expect.objectContaining({ artistName: 'Direct Artist', albumArt: 'http://direct-art.jpg' })
+        );
+    });
+
+    it('skips Spotify search entirely when not connected', async () => {
+        setupMocks({ spotify: { isSpotifyConnected: false } });
+        const { buildSpotifyQuery } = require('../utils/helpers');
+        buildSpotifyQuery.mockImplementation((t, a) => t && a ? `track:${t} artist:${a}` : t || '');
+
+        await renderWithUpload();
+        fireEvent.click(screen.getByTitle('Add to Workspace'));
+        await waitFor(() => expect(mockHandleAddTrack).toHaveBeenCalled());
+
+        expect(mockSearchSpotify).not.toHaveBeenCalled();
+        expect(mockHandleAddTrack).toHaveBeenCalledWith(
+            expect.objectContaining({ artistName: 'Local File' })
         );
     });
 });

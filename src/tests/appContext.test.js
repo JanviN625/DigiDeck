@@ -763,4 +763,97 @@ describe('useSpotifyConnect', () => {
         expect(result.current.isSpotifyConnected).toBe(false);
         expect(result.current.spotifyProfile).toBeNull();
     });
+
+    it('resets isConnecting to false when initiateLogin rejects', async () => {
+        const { initiateLogin } = require('../spotify/spotifyApi');
+        initiateLogin.mockRejectedValueOnce(new Error('OAuth cancelled'));
+
+        const { result } = renderHook(() => useSpotifyConnect());
+
+        await act(async () => { await result.current.connectSpotify(); });
+
+        expect(result.current.isConnecting).toBe(false);
+    });
+});
+
+// ─── handleDeleteTrack — skipHistory ─────────────────────────────────────────
+
+describe('handleDeleteTrack — skipHistory', () => {
+    beforeEach(() => {
+        setupMocks();
+        localStorage.clear();
+    });
+
+    it('does not add to undo history when skipHistory=true', () => {
+        const { result } = renderMix();
+        const trackId = result.current.tracks[0].id;
+        act(() => { result.current.handleDeleteTrack(trackId, true); });
+        expect(result.current.canUndo).toBe(false);
+    });
+});
+
+// ─── handleOverwriteWorkspace — partial data ──────────────────────────────────
+
+describe('handleOverwriteWorkspace — partial data', () => {
+    beforeEach(() => {
+        setupMocks();
+        localStorage.clear();
+    });
+
+    it('leaves masterBpm and globalZoom unchanged when only tracks are provided', () => {
+        const { result } = renderMix();
+        const originalBpm = result.current.masterBpm;
+        const originalZoom = result.current.globalZoom;
+
+        act(() => { result.current.handleOverwriteWorkspace({ tracks: [{ id: 55, title: 'Partial' }] }); });
+
+        expect(result.current.masterBpm).toBe(originalBpm);
+        expect(result.current.globalZoom).toBe(originalZoom);
+    });
+
+    it('updates only masterBpm when zoom is omitted', () => {
+        const { result } = renderMix();
+        const originalZoom = result.current.globalZoom;
+
+        act(() => { result.current.handleOverwriteWorkspace({ tracks: [], masterBpm: 175 }); });
+
+        expect(result.current.masterBpm).toBe(175);
+        expect(result.current.globalZoom).toBe(originalZoom);
+    });
+});
+
+// ─── handleDuplicateTrack — deep copy ─────────────────────────────────────────
+
+describe('handleDuplicateTrack — deep copy', () => {
+    beforeEach(() => {
+        setupMocks();
+        localStorage.clear();
+    });
+
+    it('creates independent segment arrays so copy and source do not share references', () => {
+        const { result } = renderMix();
+        const srcId = result.current.tracks[0].id;
+
+        // Give the source track segments with nested objects
+        act(() => {
+            result.current.handleUpdateTrack(srcId, {
+                initialSegments: [{
+                    id: 'seg1', start: 0, end: 10,
+                    eqKills: { low: false },
+                    effects: [{ id: 'e1', params: { mix: 0.5 } }],
+                }],
+            }, true);
+        });
+
+        const trackData = result.current.tracks.find(t => t.id === srcId);
+        act(() => { result.current.handleDuplicateTrack(srcId, trackData); });
+
+        const src = result.current.tracks.find(t => t.id === srcId);
+        const copy = result.current.tracks.find(t => t.id !== srcId);
+
+        expect(src.initialSegments).not.toBe(copy.initialSegments);
+        expect(src.initialSegments[0]).not.toBe(copy.initialSegments[0]);
+        expect(src.initialSegments[0].eqKills).not.toBe(copy.initialSegments[0].eqKills);
+        expect(src.initialSegments[0].effects[0]).not.toBe(copy.initialSegments[0].effects[0]);
+    });
 });
