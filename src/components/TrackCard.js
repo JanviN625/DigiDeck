@@ -856,34 +856,38 @@ export default function TrackCard({
     }, [bpm, masterBpm, trackId]);
 
     // Split track at playhead position — inserts a cut point into the segments array.
-    // Cut snaps to the nearest beat/half-beat when Essentia data is available.
     const handleSplit = useCallback(() => {
         if (!audioUrl || !waveformReadyRef.current || !wavesurferRef.current) return;
         const duration = durationRef.current;
         if (!duration) return;
 
-        let timeSec = wavesurferRef.current.getCurrentTime();
-
-        const pct = timeSec / duration;
+        // Capture pct ONCE — stays stable across the sync state update + re-render cycle.
+        let pct = currentTimePctRef.current;
+        if (!pct) pct = wavesurferRef.current.getCurrentTime() / duration;
         if (pct <= 0 || pct >= 1) return;
-        setSegments(prev => {
-            // >= for startPct so a split right after an existing cut point (where
-            // pct === seg.startPct) correctly targets the segment to the right.
-            const idx = prev.findIndex(seg => pct >= seg.startPct && pct < seg.endPct);
-            if (idx === -1) return prev;
-            const seg = prev[idx];
-            // Propagate masterTimePct: right half inherits its position within master timeline
-            const rightMasterTimePct = seg.masterTimePct !== null && masterDuration > 0
-                ? seg.masterTimePct + (pct - seg.startPct) * audioDuration / masterDuration
-                : null;
-            const next = [...prev];
-            next.splice(idx, 1,
-                { ...seg, startPct: seg.startPct, endPct: pct, fadeOut: 0 },
-                { ...seg, id: Date.now(), startPct: pct, endPct: seg.endPct, fadeIn: 0, masterTimePct: rightMasterTimePct }
-            );
-            handleUpdateTrack(trackId, { initialSegments: next });
-            return next;
-        });
+
+        const prev = segmentsRef.current;
+        const idx = prev.findIndex(seg => pct >= seg.startPct && pct < seg.endPct);
+        if (idx === -1) return;
+
+        const seg = prev[idx];
+        const rightMasterTimePct = seg.masterTimePct !== null && masterDuration > 0
+            ? seg.masterTimePct + (pct - seg.startPct) * audioDuration / masterDuration
+            : null;
+        const next = [...prev];
+        next.splice(idx, 1,
+            { ...seg, endPct: pct, fadeOut: 0 },
+            { ...seg, id: Date.now(), startPct: pct, endPct: seg.endPct, fadeIn: 0, masterTimePct: rightMasterTimePct }
+        );
+
+        // Apply state before persisting so UI is instant.
+        setSegments(next);
+        handleUpdateTrack(trackId, { initialSegments: next });
+
+        // Re-anchor wavesurfer to the exact pre-split position so the re-render
+        // cycle triggered by handleUpdateTrack cannot drift the playhead.
+        wavesurferRef.current.seekTo(Math.min(1, Math.max(0, pct)));
+        currentTimePctRef.current = pct;
     }, [audioUrl, handleUpdateTrack, trackId, masterDuration, audioDuration]);
 
     // eslint-disable-next-line no-unused-vars
