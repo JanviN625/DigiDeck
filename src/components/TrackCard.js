@@ -2076,7 +2076,7 @@ export default function TrackCard({
                                 {/* Segment indicator — shows which segment's settings are active */}
                                 {segments.length > 1 && (() => {
                                     const activeSeg = segments.find(s => s.id === activeSegmentId);
-                                    const activeIdx = segments.findIndex(s => s.id === activeSegmentId);
+
                                     return (
                                         <div className="flex items-center gap-2 pb-1 border-b border-base-700/60">
                                             <span className="text-xs font-bold text-base-400 uppercase tracking-wider">Editing:</span>
