@@ -57,7 +57,6 @@ const setupMocks = () => {
     const { initiateLogin, disconnectSpotify, isLoggedIn } = require('../spotify/spotifyApi');
     initiateLogin.mockResolvedValue(undefined);
     disconnectSpotify.mockResolvedValue(undefined);
-    isLoggedIn.mockReturnValue(false);
 };
 
 // ─── Test wrappers ────────────────────────────────────────────────────────────

@@ -7,6 +7,12 @@ import PlaylistModal from '../components/PlaylistModal';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
+const MOCK_MIX_STATE = {
+    handleAddTrack: jest.fn(),
+    handleOverwriteWorkspace: jest.fn(),
+    tracks: [{ id: 1, title: 'Existing Track' }],
+};
+
 jest.mock('../firebase/firebase', () => ({
     useFirebaseAuth: jest.fn(),
     friendlyError: jest.fn(),
@@ -255,42 +261,10 @@ describe('AccountModal — display name', () => { // [NFR-004]
 // ─── AccountModal — email (email/password user) ───────────────────────────────
 
 describe('AccountModal — email (email/password user)', () => { // [NFR-004]
-    it('renders an editable email input seeded from user.email', () => {
+    it('renders a disabled email input seeded from user.email', () => {
         render(<AccountModal isOpen={true} onClose={mockOnClose} />);
         const emailInput = screen.getByDisplayValue('test@example.com');
-        expect(emailInput).not.toBeDisabled();
-    });
-
-    it('shows an error when saving an empty email', () => {
-        render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        const emailInput = screen.getByDisplayValue('test@example.com');
-        fireEvent.change(emailInput, { target: { value: '   ' } });
-        fireEvent.click(saveBtn(1));
-        expect(screen.getByText('Email cannot be empty.')).toBeInTheDocument();
-        expect(mockUpdateUserEmail).not.toHaveBeenCalled();
-    });
-
-    it('calls updateUserEmail with the new email', async () => {
-        mockUpdateUserEmail.mockResolvedValueOnce();
-        render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        const emailInput = screen.getByDisplayValue('test@example.com');
-        fireEvent.change(emailInput, { target: { value: 'new@example.com' } });
-        fireEvent.click(saveBtn(1));
-        await waitFor(() => expect(mockUpdateUserEmail).toHaveBeenCalledWith('new@example.com'));
-    });
-
-    it('shows "Email updated." after a successful save', async () => {
-        mockUpdateUserEmail.mockResolvedValueOnce();
-        render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        fireEvent.click(saveBtn(1));
-        expect(await screen.findByText('Email updated.')).toBeInTheDocument();
-    });
-
-    it('shows a friendly error when updateUserEmail rejects', async () => {
-        mockUpdateUserEmail.mockRejectedValueOnce(new Error('requires-recent-login'));
-        render(<AccountModal isOpen={true} onClose={mockOnClose} />);
-        fireEvent.click(saveBtn(1));
-        expect(await screen.findByText('requires-recent-login')).toBeInTheDocument();
+        expect(emailInput).toBeDisabled();
     });
 });
 
@@ -899,23 +873,27 @@ describe('PlaylistModal — open header', () => {
     it('renders the playlist name', async () => {
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />);
         expect(screen.getByText('Test Playlist')).toBeInTheDocument();
+        await screen.findByText('Song One');
     });
 
-    it('shows cover image when playlist has images', () => {
+    it('shows cover image when playlist has images', async () => {
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />);
         const img = screen.getByAltText('Cover');
         expect(img).toHaveAttribute('src', 'https://cover.example/img.jpg');
+        await screen.findByText('Song One');
     });
 
-    it('shows Music icon fallback when playlist has no images', () => {
+    it('shows Music icon fallback when playlist has no images', async () => {
         const playlistNoImage = { ...mockPlaylist, images: [] };
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={playlistNoImage} />);
         expect(screen.queryByAltText('Cover')).not.toBeInTheDocument();
+        await screen.findByText('Song One');
     });
 
-    it('shows track total from playlist metadata', () => {
+    it('shows track total from playlist metadata', async () => {
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />);
         expect(screen.getByText('2 tracks')).toBeInTheDocument();
+        await screen.findByText('Song One');
     });
 });
 
@@ -925,6 +903,7 @@ describe('PlaylistModal — track list', () => {
     it('calls getPlaylistTracks with the playlist id on open', async () => {
         render(<PlaylistModal isOpen={true} onClose={jest.fn()} playlist={mockPlaylist} />);
         await waitFor(() => expect(mockGetPlaylistTracks).toHaveBeenCalledWith('playlist_1', 50, 0)); // waitFor on mock, not DOM query
+        await screen.findByText('Song One');
     });
 
     it('renders track names after a successful fetch', async () => {

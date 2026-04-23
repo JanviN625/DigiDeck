@@ -325,6 +325,7 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
     // --- Derived --------------------------------------------------------------
 
     const activeChat = chats.find(c => c.id === activeChatId) ?? null;
+    console.log("AIPanel Render debug:", JSON.stringify({ activeChatId, idType: typeof activeChatId, firstId: chats[0]?.id, firstIdType: typeof (chats[0]?.id), match: chats[0]?.id === activeChatId, matchLoose: chats[0]?.id == activeChatId }));
     const messages   = useMemo(() => activeChat?.messages ?? [], [activeChat]);
 
     // Welcome message is always derived from live filledCount at render time;
