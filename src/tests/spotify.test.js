@@ -74,6 +74,8 @@ const mockErr = (status = 400, body = '{"error":{"message":"Bad Request"}}') => 
     ok: false, status, statusText: 'Error', text: async () => body,
 });
 
+// ─── Setup & Teardown ──────────────────────────────────────────────────────────
+
 // ─── Per-test setup ───────────────────────────────────────────────────────────
 
 beforeEach(() => {

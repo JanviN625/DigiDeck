@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 export const DEFAULT_SETTINGS = {
+  experienceLevel: '',
   animationsEnabled: true,
   defaultVolume: 80,
   defaultZoom: 0,
@@ -34,10 +35,29 @@ export function useSettings() {
     } catch { return DEFAULT_SETTINGS; }
   });
 
+  useEffect(() => {
+    const handleSync = () => {
+      try {
+        const stored = localStorage.getItem('digideck_settings');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setSettings({
+            ...DEFAULT_SETTINGS,
+            ...parsed,
+            keybinds: { ...DEFAULT_SETTINGS.keybinds, ...(parsed.keybinds ?? {}) },
+          });
+        }
+      } catch {}
+    };
+    window.addEventListener('digideck-settings-changed', handleSync);
+    return () => window.removeEventListener('digideck-settings-changed', handleSync);
+  }, []);
+
   const updateSetting = useCallback((key, value) => {
     setSettings(prev => {
       const next = { ...prev, [key]: value };
       try { localStorage.setItem('digideck_settings', JSON.stringify(next)); } catch {}
+      window.dispatchEvent(new Event('digideck-settings-changed'));
       return next;
     });
   }, []);

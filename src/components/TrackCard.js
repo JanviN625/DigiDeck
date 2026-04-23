@@ -864,24 +864,6 @@ export default function TrackCard({
 
         let timeSec = wavesurferRef.current.getCurrentTime();
 
-        // Snap to nearest of: master BPM beats + analyzed beats + half-beats between analyzed beats
-        const masterBeats = masterBeatGridRef.current ?? [];
-        const trackBeats  = adjustedBeatPositionsRef.current ?? [];
-        const gridSet = new Set([...masterBeats]);
-        for (let i = 0; i < trackBeats.length; i++) {
-            gridSet.add(trackBeats[i]);
-            if (i < trackBeats.length - 1) gridSet.add((trackBeats[i] + trackBeats[i + 1]) / 2);
-        }
-        const grid = [...gridSet].sort((a, b) => a - b);
-        if (grid.length > 0) {
-            let nearest = grid[0], minDist = Math.abs(grid[0] - timeSec);
-            for (const g of grid) {
-                const d = Math.abs(g - timeSec);
-                if (d < minDist) { minDist = d; nearest = g; }
-            }
-            timeSec = nearest;
-        }
-
         const pct = timeSec / duration;
         if (pct <= 0 || pct >= 1) return;
         setSegments(prev => {
@@ -1335,13 +1317,20 @@ export default function TrackCard({
 
                 // True audio position — stFilter.sourcePosition is the end-of-read cursor,
                 // accurate at any tempo (wall-clock would drift at speed != 1.0).
-                const audioPosSec = track.stFilter
+                let audioPosSec = track.stFilter
                     ? track.stFilter.sourcePosition / track.audioBuffer.sampleRate
                     : (AudioEngineService.ctx.currentTime - track.startTime);
 
+                // Stop at the end of the longest track in the workspace
+                if (offsetSec + audioPosSec >= masterDuration && masterDuration > 0) {
+                    setIsPlaying(false);
+                    audioPosSec = masterDuration - offsetSec;
+                    masterTimeRef.current = masterDuration;
+                }
+
                 // Smooth continuous playhead — no beat-floor snapping so the cursor moves
                 // fluidly every frame. Beat-grid quantization is applied only on Ctrl+S splits.
-                const displayProportion = Math.min(1, audioPosSec / track.audioBuffer.duration);
+                const displayProportion = Math.min(1, Math.max(0, audioPosSec / track.audioBuffer.duration));
                 currentTimePctRef.current = displayProportion;
                 wavesurferRef.current.seekTo(displayProportion);
 
@@ -1710,6 +1699,12 @@ export default function TrackCard({
                                         // pressing global play immediately after picks up this position.
                                         const localSec = (currentTimePctRef.current || 0) * (durationRef.current || 0);
                                         masterTimeRef.current = offsetSec + localSec;
+                                    }
+                                    if (!isPlaying) {
+                                        if (masterTimeRef.current >= masterDuration && masterDuration > 0) {
+                                            masterTimeRef.current = 0;
+                                            handleSeekMaster(0);
+                                        }
                                     }
                                     setIsPlaying(!isPlaying);
                                 }}

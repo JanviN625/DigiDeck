@@ -4,6 +4,9 @@ import { Avatar, ScrollShadow } from '@heroui/react';
 import { useMix } from '../spotify/appContext';
 import { useFirebaseAuth } from '../firebase/firebase';
 import { buildEffectsCapabilities } from '../utils/trackConfig';
+import { useSettings, formatKeybind } from '../utils/useSettings';
+import { doc, updateDoc } from 'firebase/firestore';
+import { db } from '../firebase/firebaseConfig';
 
 // --- Camelot Wheel ------------------------------------------------------------
 
@@ -100,93 +103,115 @@ function buildSegmentLines(segs) {
     }).join('\n');
 }
 
-function buildSystemPrompt(tracks) {
+function buildSystemPrompt(tracks, settings) {
     const filledTracks = tracks.filter(t => t.audioUrl || t.spotifyId);
+    const expLevel = settings?.experienceLevel || 'intermediate';
 
-    if (!filledTracks.length) {
-        return `You are a DJ assistant and mixing engineer for DigiDeck, a browser-based music mashup studio.
-The mix is currently empty. Help the user choose starting tracks based on genre or mood preferences.
+    const kb = settings?.keybinds || {};
+    const keybindsText = `
+Configured Keyboard Shortcuts:
+- Play/Pause: ${formatKeybind(kb.playPause)}
+- Split track at playhead: ${formatKeybind(kb.splitAtPlayhead)}
+- Delete segment: ${formatKeybind(kb.deleteSegment)}
+- Copy segment: ${formatKeybind(kb.copySegment)}
+- Paste segment: ${formatKeybind(kb.pasteSegment)}
+- Undo: ${formatKeybind(kb.undo)}
+- Redo: ${formatKeybind(kb.redo)}
+- Save Project: ${formatKeybind(kb.saveProject)}
+- Load Project: ${formatKeybind(kb.loadProject)}
+- Export Project: ${formatKeybind(kb.exportProject)}`.trim();
 
-${APP_CAPABILITIES}`;
+    const EXPERIENCE_RULES = {
+        beginner: `
+[Experience Level: Absolute Beginner]
+- Vocabulary: Avoid all jargon. Explain "BPM" as "speed/tempo", "EQ" as "frequency/tone adjustments", and "Pitch" as "musical key adjustment".
+- Navigation: Provide explicit, step-by-step instructions for every action. Example: "To change the speed, use the 'Speed' slider on the track card, or type a number in the Master BPM box at the top of your screen." or "To split a track, click on the track waveform to place the playhead, then press your configured split shortcut."
+- Guidance: Be highly prescriptive. Offer exactly one or two simple suggestions at a time. Guide them to basic features like the Volume slider or Fade In/Out inputs before introducing effects.
+- Tone: Encouraging, patient, and highly educational.`,
+        
+        novice: `
+[Experience Level: Novice]
+- Vocabulary: Can use basic terms like BPM and EQ, but should briefly clarify them if used in a complex context.
+- Navigation: Point out where tools are generally located. Example: "You can add a filter by clicking the 'Add Effect' dropdown on the track card and selecting 'Pass Filter'."
+- Guidance: Suggest simple combinations of actions (e.g., clicking 'Sync' on a track to match the Master BPM, and adjusting the 'Speed' slider). Introduce them gently to slightly more advanced concepts like harmonic mixing.
+- Tone: Helpful, guiding, and structured.`,
+        
+        intermediate: `
+[Experience Level: Intermediate]
+- Vocabulary: Use standard industry terminology freely (Camelot wheel, High/Low pass filters, Decibels).
+- Navigation: Only explain UI navigation when suggesting a feature they likely haven't used yet (e.g., "You can 'Extract' a segment to move it to a new track while preserving its effects"). Do not explain how to change Speed or Volume unless asked.
+- Guidance: Focus on creative suggestions—compatible tracks, transition ideas, and using the Low/Mid/High EQ ranges (in dB) effectively.
+- Tone: Collaborative, concise, and professional.`,
+        
+        proficient: `
+[Experience Level: Proficient]
+- Vocabulary: Technical and specific. Can discuss harmonic relationships (semitone pitch adjustments) and specific Pass Filter parameters.
+- Navigation: Use shorthand and reference keyboard shortcuts heavily. Example: "Use your configured save shortcut" or "Apply a Low Pass Filter via the Add Effect menu." Do not explain where menus are unless deeply hidden.
+- Guidance: Provide specific, nuanced mixing advice. Assume they can execute the advice perfectly. Focus on workflow efficiency and creative ideas.
+- Tone: Direct, efficient, and peer-to-peer.`,
+        
+        advanced: `
+[Experience Level: Advanced]
+- Vocabulary: Unrestricted technical terminology regarding mixing, frequency ranges, and track structuring.
+- Navigation: ZERO UI explanations. Never tell them where a button is or how to use a basic feature unless they explicitly ask "Where is X in this app?".
+- Guidance: Strictly answer the prompt with minimal fluff. If they ask for track compatibility, provide just the data (BPM, Key matches). Provide high-level structural advice.
+- Tone: Ultra-concise, analytical, and purely functional.`
+    };
+
+    const levelRules = EXPERIENCE_RULES[expLevel] || EXPERIENCE_RULES.intermediate;
+
+    let trackState = `The mix is currently empty. Help the user choose starting tracks based on genre or mood preferences.`;
+    if (filledTracks.length > 0) {
+        trackState = `Current mix - BPM and key values are measured from the actual audio; EQ, pitch, speed, fades, and effects are the user's current settings:\n` + filledTracks.map((t, i) => {
+            const bpm     = t.bpm     != null ? t.bpm : '(analysing…)';
+            const key     = t.trackKey || '(analysing…)';
+            const camelot = getCamelotPosition(t.trackKey);
+            const segLines = buildSegmentLines(t.initialSegments);
+            const source = t.isLocal ? 'uploaded file' : 'Spotify preview';
+            const energy = t.energy != null ? ` | Energy: ${t.energy}` : '';
+            return `  Track ${i + 1}: "${t.title}"${t.artistName ? `  - ${t.artistName}` : ''} [${source}]\n    BPM: ${bpm} | Key: ${key}${camelot ? ` (Camelot: ${camelot})` : ''}${energy}\n${segLines || '    Segment 1: all settings at default (pitch 0, speed 1x, no EQ, no effects)'}`;
+        }).join('\n\n');
     }
-
-    const trackLines = filledTracks.map((t, i) => {
-        const bpm     = t.bpm     != null ? t.bpm : '(analysing…)';
-        const key     = t.trackKey || '(analysing…)';
-        const camelot = getCamelotPosition(t.trackKey);
-        const segLines = buildSegmentLines(t.initialSegments);
-        const source = t.isLocal ? 'uploaded file' : 'Spotify preview';
-        const energy = t.energy != null ? ` | Energy: ${t.energy}` : '';
-        return `  Track ${i + 1}: "${t.title}"${t.artistName ? `  - ${t.artistName}` : ''} [${source}]
-    BPM: ${bpm} | Key: ${key}${camelot ? ` (Camelot: ${camelot})` : ''}${energy}
-${segLines || '    Segment 1: all settings at default (pitch 0, speed 1x, no EQ, no effects)'}`;
-    }).join('\n\n');
 
     return `You are a DJ assistant and mixing engineer for DigiDeck, a browser-based music mashup studio.
 
 ${APP_CAPABILITIES}
 
-Current mix  - BPM and key values are measured from the actual audio; EQ, pitch, speed, fades, and effects are the user's current settings:
-${trackLines}
+${keybindsText}
 
-Rules:
-- You know the full state of each track and every available control  - never ask the user what effects or controls are available
-- Give specific, actionable advice using exact control names and values that exist within the stated ranges and presets
-- For speed: any value between 0.25 and 2.00 is valid; calculate target BPM / current BPM and clamp to that range
-- BPM is read-only (Key is also read-only)  - never tell the user to "change the BPM"; recommend Speed adjustments instead
-- When asked to recommend tracks, always do so  - give specific song and artist names. Note that your BPM/key knowledge of those tracks may be inaccurate; explain compatibility reasoning based on genre, style, and mood instead
-- The bias disclosure shown in the UI applies to your training data on specific tracks  - it does not mean you should refuse to recommend. Recommend confidently with appropriate caveats
-- Prioritise BPM proximity (within ~10 BPM via Speed) and Camelot key adjacency (+/-1) for harmonic mixing
-- Remind users that recommended tracks must be sourced and uploaded manually via the Library panel
-- Keep responses concise; use markdown headers and bullet lists for multi-step advice`;
+${trackState}
+
+GLOBAL INSTRUCTIONS:
+- You know the full state of each track and every available control - never ask the user what effects or controls are available.
+- Give specific, actionable advice using exact control names and values that exist within the stated ranges and presets.
+- Regardless of the user's experience level, always allow and encourage general requests. If the user asks for song recommendations, provide an unrestricted list of ideas (do not limit song options), but ensure all constraints are logically met. This includes user constraints (genre, language, mood) and critical technical constraints (BPM closeness, key harmony relative to existing workspace tracks or the Master BPM).
+- CRITICALLY IMPORTANT: Never invent app features. If a user asks how to do something unsupported (e.g., "How do I move my segments freely along the timeline?"), explicitly state that the feature is not currently available, and offer a real alternative (e.g., "You cannot move segments freely, but you can swap their order using the left/right arrows within the segment").
+- Keyboard Shortcuts: Do not reference shortcuts by hardcoded keys (e.g., do not say "Press Ctrl+S"). Always reference the shortcut by checking the user's configured keyboard shortcuts provided in this context.
+- BPM is read-only (Key is also read-only). For speed: any value between 0.25 and 2.00 is valid; calculate target BPM / current BPM and clamp to that range.
+- The bias disclosure shown in the UI applies to your training data on specific tracks - it does not mean you should refuse to recommend. Recommend confidently with appropriate caveats.
+
+${levelRules}`;
 }
 
 // --- Helpers -----------------------------------------------------------------
 
 const welcomeText = (count) => count > 0
-    ? `I can see your mix has ${count} track${count > 1 ? 's' : ''}. Ask me for compatible suggestions, or tell me the vibe you're going for.`
-    : `No tracks yet  - tell me what you're working on and I'll suggest some starting points.`;
+    ? `I can see your mix has **${count} track${count > 1 ? 's' : ''}**.\n\nAsk me for compatible suggestions, or tell me the vibe you're going for.`
+    : `**No tracks yet** - tell me what you're working on and I'll suggest some starting points.`;
 
-const makeNewChat = (filledCount) => ({
-    id: Date.now(),
-    title: 'New Chat',
-    messages: [{ role: 'assistant', content: welcomeText(filledCount), isWelcome: true }],
-    createdAt: Date.now(),
-});
-
-// --- Chips -------------------------------------------------------------------
-
-const CHIPS = [
-    { id: 'diagnose',   label: 'Diagnose mix',        prefill: 'Why does my mix sound ' },
-    { id: 'recipe',     label: 'Effects chain recipe', prefill: 'Give me a specific effects chain recipe for a ' },
-    { id: 'setbuilder', label: 'Build set order',       prefill: null },
-    { id: 'health',     label: 'Health check',          prefill: null },
-    { id: 'segment',    label: 'Segment advice',        prefill: null },
-    { id: 'transition', label: 'Plan transition',       prefill: null },
-];
-
-const buildChipMessage = (chipId, getLiveTracks) => {
-    const tracks = getLiveTracks().filter(t => t.audioUrl || t.spotifyId);
-    switch (chipId) {
-        case 'health':
-            return 'Audit my current mix for issues: flag large BPM gaps, key clashes, clipping-risk EQ settings, missing fades, and conflicting effects.';
-        case 'transition':
-            if (tracks.length >= 2) {
-                return `Plan a detailed transition from "${tracks[0].title}" to "${tracks[1].title}": speed multiplier, pitch shift, EQ kills, segment cut points, and fade timing.`;
-            }
-            return 'Plan a detailed transition between two tracks: advise on speed multiplier, pitch shift, EQ kills, segment cut points, and fade timing.';
-        case 'segment':
-            return 'Based on the BPM and segment data for my loaded tracks, advise where I should cut each track for the smoothest transitions.';
-        case 'setbuilder': {
-            const names = tracks.map(t => `"${t.title}"`).join(', ');
-            return names
-                ? `Plan the optimal DJ set order and transitions for: ${names}. Consider BPM flow, key compatibility, and energy arc.`
-                : 'Help me plan a DJ set order and transitions. What should I consider for BPM flow, key compatibility, and energy arc?';
-        }
-        default:
-            return null;
-    }
+const makeNewChat = (filledCount, experienceLevel) => {
+    const isFirstTime = !experienceLevel;
+    return {
+        id: Date.now(),
+        title: 'New Chat',
+        messages: isFirstTime
+            ? [{ role: 'assistant', content: '**To help me tailor my suggestions**, what is your experience level with DJ mixing and audio applications?', isOnboarding: true }]
+            : [{ role: 'assistant', content: welcomeText(filledCount), isWelcome: true }],
+        createdAt: Date.now(),
+    };
 };
+
+
 
 // --- Constants ----------------------------------------------------------------
 
@@ -197,18 +222,22 @@ const CONTEXT_LIMIT = 20; // messages at which the API starts dropping early his
 
 // --- MarkdownMessage ----------------------------------------------------------
 
-function MarkdownMessage({ content }) {
+function MarkdownMessage({ content, isUser }) {
     const lines = (content ?? '').split('\n');
     const out = [];
     let listItems = [];
     let listType = null;
 
+    const textColor = isUser ? 'text-base-100' : 'text-base-200';
+    const mutedColor = isUser ? 'text-base-200' : 'text-base-300';
+    const boldColor = isUser ? 'text-white' : 'text-base-100';
+
     const flush = () => {
         if (!listItems.length) return;
         const Tag = listType === 'ol' ? 'ol' : 'ul';
         const cls = listType === 'ol'
-            ? 'list-decimal list-inside space-y-0.5 my-1 pl-1'
-            : 'list-disc list-inside space-y-0.5 my-1 pl-1';
+            ? `list-decimal list-inside space-y-0.5 my-1 pl-1 ${mutedColor}`
+            : `list-disc list-inside space-y-0.5 my-1 pl-1 ${mutedColor}`;
         out.push(<Tag key={'list-' + out.length} className={cls}>{listItems}</Tag>);
         listItems = []; listType = null;
     };
@@ -217,11 +246,11 @@ function MarkdownMessage({ content }) {
         const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)/g);
         return <span key={k}>{parts.map((p, i) => {
             if (p.startsWith('**') && p.endsWith('**'))
-                return <strong key={i} className="font-semibold text-base-100">{p.slice(2, -2)}</strong>;
+                return <strong key={i} className={`font-semibold ${boldColor}`}>{p.slice(2, -2)}</strong>;
             if (p.startsWith('*') && p.endsWith('*'))
-                return <em key={i} className="italic text-base-300">{p.slice(1, -1)}</em>;
+                return <em key={i} className={`italic ${mutedColor}`}>{p.slice(1, -1)}</em>;
             if (p.startsWith('`') && p.endsWith('`'))
-                return <code key={i} className="bg-base-700 rounded px-1 text-xs font-mono text-base-200">{p.slice(1, -1)}</code>;
+                return <code key={i} className={`bg-base-700 rounded px-1 text-xs font-mono ${textColor}`}>{p.slice(1, -1)}</code>;
             return p;
         })}</span>;
     };
@@ -235,21 +264,21 @@ function MarkdownMessage({ content }) {
         if (ul) {
             if (listType === 'ol') flush();
             listType = 'ul';
-            listItems.push(<li key={i} className="text-base-300">{inline(ul[1], i)}</li>);
+            listItems.push(<li key={i} className={mutedColor}>{inline(ul[1], i)}</li>);
         } else if (ol) {
             if (listType === 'ul') flush();
             listType = 'ol';
-            listItems.push(<li key={i} className="text-base-300">{inline(ol[1], i)}</li>);
+            listItems.push(<li key={i} className={mutedColor}>{inline(ol[1], i)}</li>);
         } else {
             flush();
             if (h2) {
-                out.push(<p key={i} className="font-bold text-base-100 mt-2 mb-0.5 text-sm">{inline(h2[1], i)}</p>);
+                out.push(<p key={i} className={`font-bold ${boldColor} mt-2 mb-0.5 text-sm`}>{inline(h2[1], i)}</p>);
             } else if (h3) {
-                out.push(<p key={i} className="font-semibold text-base-200 mt-1.5 mb-0.5 text-sm">{inline(h3[1], i)}</p>);
+                out.push(<p key={i} className={`font-semibold ${textColor} mt-1.5 mb-0.5 text-sm`}>{inline(h3[1], i)}</p>);
             } else if (line.trim() === '') {
                 out.push(<div key={i} className="h-1.5" />);
             } else {
-                out.push(<p key={i} className="text-base-200">{inline(line, i)}</p>);
+                out.push(<p key={i} className={textColor}>{inline(line, i)}</p>);
             }
         }
     });
@@ -260,8 +289,9 @@ function MarkdownMessage({ content }) {
 // --- AIPanel -----------------------------------------------------------------
 
 export default function AIPanel({ isCollapsed, setIsCollapsed }) {
-    const { tracks, getLiveTracks } = useMix();
+    const { tracks, getLiveTracks, chats, setChats, activeChatId, setActiveChatId } = useMix();
     const { user } = useFirebaseAuth();
+    const { settings, updateSetting } = useSettings();
     const displayName = user?.displayName || user?.email || 'User';
     const avatarSrc   = user?.photoURL || null;
     const [panelWidth, setPanelWidth]   = useState(MIN_WIDTH);
@@ -274,32 +304,13 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
 
     const filledCount = tracks.filter(t => t.audioUrl || t.spotifyId).length;
 
-    // --- Chat persistence -----------------------------------------------------
 
-    const [chats, setChats] = useState(() => {
-        try {
-            const saved = localStorage.getItem('digideck-ai-chats');
-            return saved ? JSON.parse(saved) : [];
-        } catch { return []; }
-    });
-
-    const [activeChatId, setActiveChatId] = useState(() => {
-        try { return localStorage.getItem('digideck-active-chat-id') ?? null; } catch { return null; }
-    });
-
-    useEffect(() => {
-        localStorage.setItem('digideck-ai-chats', JSON.stringify(chats));
-    }, [chats]);
-
-    useEffect(() => {
-        if (activeChatId != null) localStorage.setItem('digideck-active-chat-id', String(activeChatId));
-    }, [activeChatId]);
 
     // On mount: ensure there's always at least one chat and a valid active id
     useEffect(() => {
         setChats(prev => {
             if (prev.length === 0) {
-                const first = makeNewChat(filledCount);
+                const first = makeNewChat(filledCount, settings.experienceLevel);
                 setActiveChatId(first.id);
                 return [first];
             }
@@ -314,6 +325,7 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
     // --- Derived --------------------------------------------------------------
 
     const activeChat = chats.find(c => c.id === activeChatId) ?? null;
+    console.log("AIPanel Render debug:", JSON.stringify({ activeChatId, idType: typeof activeChatId, firstId: chats[0]?.id, firstIdType: typeof (chats[0]?.id), match: chats[0]?.id === activeChatId, matchLoose: chats[0]?.id === activeChatId }));
     const messages   = useMemo(() => activeChat?.messages ?? [], [activeChat]);
 
     // Welcome message is always derived from live filledCount at render time;
@@ -328,7 +340,7 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
 
     const createNewChat = () => {
         if (chats.length >= MAX_CHATS) return;
-        const newChat = makeNewChat(filledCount);
+        const newChat = makeNewChat(filledCount, settings.experienceLevel);
         setChats(prev => [...prev, newChat]);
         setActiveChatId(newChat.id);
         setShowModal(false);
@@ -355,6 +367,36 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
     const canCreateChat   = chats.length < MAX_CHATS;
 
     // --- Send message ---------------------------------------------------------
+
+    const handleExperienceSelect = async (level) => {
+        updateSetting('experienceLevel', level);
+        if (user?.uid) {
+            try { await updateDoc(doc(db, 'users', user.uid), { experienceLevel: level }); }
+            catch (err) { console.error('Error saving experience level:', err); }
+        }
+
+        const labels = {
+            beginner: "Absolute Beginner",
+            novice: "Novice",
+            intermediate: "Intermediate",
+            proficient: "Proficient",
+            advanced: "Advanced"
+        };
+        const userMsg = { role: 'user', content: labels[level] };
+        const ackMsg = { role: 'assistant', content: '**Your experience has been taken into consideration** and responses are now tailored with that in mind!\n\n*To change this, please update within profile settings.*' };
+        const welcomeMsg = { role: 'assistant', content: welcomeText(filledCount), isWelcome: true };
+
+        setChats(prev => prev.map(c => {
+            if (c.id !== activeChatId) return c;
+            // remove the onboarding flag so it doesn't render buttons anymore
+            const strippedMessages = c.messages.map(m => m.isOnboarding ? { ...m, isOnboarding: false } : m);
+            return {
+                ...c,
+                messages: [...strippedMessages, userMsg, ackMsg, welcomeMsg],
+                title: 'New Chat'
+            };
+        }));
+    };
 
     const handleSendWithText = async (text) => {
         if (!text || loading || !activeChatId) return;
@@ -388,7 +430,7 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     messages: apiMessages.slice(-20),
-                    systemPrompt: buildSystemPrompt(getLiveTracks()),
+                    systemPrompt: buildSystemPrompt(getLiveTracks(), settings),
                 }),
             });
             const data = await res.json();
@@ -425,15 +467,7 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
         }
     };
 
-    const handleChipClick = (chip) => {
-        if (chip.prefill !== null) {
-            setInput(chip.prefill);
-            inputRef.current?.focus();
-        } else {
-            const msg = buildChipMessage(chip.id, getLiveTracks);
-            if (msg) handleSendWithText(msg);
-        }
-    };
+
 
     // --- Resize handle --------------------------------------------------------
 
@@ -518,7 +552,7 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
                                     onKeyDown={(e) => e.key === 'Enter' && switchToChat(chat.id)}
                                     className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-left transition-colors cursor-pointer ${
                                         chat.id === activeChatId
-                                            ? 'bg-base-700 ring-1 ring-base-600'
+                                            ? 'bg-base-850 ring-1 ring-base-500'
                                             : 'bg-base-800 hover:bg-base-700'
                                     }`}
                                 >
@@ -547,7 +581,7 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
                             <button
                                 onClick={createNewChat}
                                 disabled={!canCreateChat}
-                                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-base-700 hover:bg-base-600 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-sm font-medium text-base-200 transition-colors"
+                                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-base-500 hover:bg-base-400 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-sm font-medium text-base-50 transition-colors"
                             >
                                 <Plus size={15} />
                                 New Chat
@@ -600,7 +634,7 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
                         <button
                             onClick={createNewChat}
                             disabled={!canCreateChat}
-                            className="flex items-center gap-2 px-4 py-2 bg-base-700 hover:bg-base-600 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-sm text-base-200 transition-colors"
+                            className="flex items-center gap-2 px-4 py-2 bg-base-500 hover:bg-base-400 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-sm text-base-50 transition-colors"
                         >
                             <Plus size={14} />
                             New Chat
@@ -635,7 +669,7 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
                                                 <X size={11} />
                                             </button>
                                         </div>
-                                        <MarkdownMessage content="Track suggestions are based on training data and may be inaccurate. BPM and key values shown are measured directly from your audio - not guessed." />
+                                        <MarkdownMessage content={`**Track suggestions are based on training data** and may be inaccurate.\n\nBPM and key values shown are measured directly from your audio - not guessed.`} />
                                     </div>
                                 </div>
                             )}
@@ -656,6 +690,15 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
                                         />
                                         <div className="bg-base-800 border border-base-700 rounded-2xl rounded-bl-none px-3.5 py-2.5 text-sm text-base-200 max-w-[85%] shadow-sm">
                                             <MarkdownMessage content={content} />
+                                            {msg.isOnboarding && (
+                                                <div className="mt-3 flex flex-col gap-2">
+                                                    <button onClick={() => handleExperienceSelect('beginner')} className="text-left px-3 py-2 bg-base-700 hover:bg-base-600 rounded-xl text-xs text-base-200 transition-colors">Absolute Beginner</button>
+                                                    <button onClick={() => handleExperienceSelect('novice')} className="text-left px-3 py-2 bg-base-700 hover:bg-base-600 rounded-xl text-xs text-base-200 transition-colors">Novice</button>
+                                                    <button onClick={() => handleExperienceSelect('intermediate')} className="text-left px-3 py-2 bg-base-700 hover:bg-base-600 rounded-xl text-xs text-base-200 transition-colors">Intermediate</button>
+                                                    <button onClick={() => handleExperienceSelect('proficient')} className="text-left px-3 py-2 bg-base-700 hover:bg-base-600 rounded-xl text-xs text-base-200 transition-colors">Proficient</button>
+                                                    <button onClick={() => handleExperienceSelect('advanced')} className="text-left px-3 py-2 bg-base-700 hover:bg-base-600 rounded-xl text-xs text-base-200 transition-colors">Advanced</button>
+                                                </div>
+                                            )}
                                             {msg.capturedAt && (
                                                 <p className="text-[10px] text-base-400 mt-1.5">
                                                     Context at {new Date(msg.capturedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -665,8 +708,8 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
                                     </div>
                                 ) : (
                                     <div key={i} className="flex items-end justify-end gap-2">
-                                        <div className="bg-base-600 border border-base-500 rounded-2xl rounded-br-none px-3.5 py-2.5 text-sm text-base-100 max-w-[85%] whitespace-pre-wrap shadow-sm">
-                                            {msg.content}
+                                        <div className="bg-base-600 border border-base-500 rounded-2xl rounded-br-none px-3.5 py-2.5 max-w-[85%] shadow-sm">
+                                            <MarkdownMessage content={msg.content} isUser />
                                         </div>
                                         {avatarSrc ? (
                                             <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 border-2 border-base-500">
@@ -718,40 +761,24 @@ export default function AIPanel({ isCollapsed, setIsCollapsed }) {
                             <div ref={bottomRef} />
                         </ScrollShadow>
 
-                        {/* Chips row */}
-                        <div className="shrink-0 px-3 pt-2 pb-1">
-                            <div className="flex gap-1.5 overflow-x-auto pb-1">
-                                {CHIPS.map(chip => (
-                                    <button
-                                        key={chip.id}
-                                        disabled={loading}
-                                        onClick={() => handleChipClick(chip)}
-                                        className="shrink-0 px-2.5 py-1 rounded-full text-xs font-medium bg-base-800 border border-base-700 text-base-400 hover:text-base-200 hover:border-base-500 hover:bg-base-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
-                                    >
-                                        {chip.label}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
 
-                        {/* Input row */}
+
                         <div className="shrink-0 px-3 pb-4 pt-2">
-                            <div className="flex items-center gap-2 bg-base-800 border border-base-700 rounded-xl px-3 py-2 shadow-lg focus-within:ring-1 focus-within:ring-base-600">
+                            <div className="flex items-center gap-2 bg-base-800 border border-base-700 rounded-xl px-3 py-2 shadow-lg focus-within:border-base-600 focus-within:ring-1 focus-within:ring-base-600 transition-shadow">
                                 <input
                                     ref={inputRef}
                                     type="text"
                                     value={input}
                                     onChange={e => setInput(e.target.value)}
                                     onKeyDown={handleKeyDown}
-                                    placeholder="Ask for track suggestions…"
-                                    maxLength={300}
-                                    className="flex-1 bg-transparent text-sm text-base-200 placeholder-base-600 outline-none"
+                                    placeholder="Ask about current mix..."
+                                    className="flex-1 bg-transparent text-sm text-base-100 placeholder-base-200 outline-none"
                                 />
                                 <button
                                     onClick={handleSend}
                                     disabled={!input.trim() || loading}
                                     title="Send"
-                                    className="p-1 rounded-lg text-base-500 hover:text-base-200 hover:bg-base-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+                                    className="p-1 rounded-lg text-base-100 hover:text-white hover:bg-base-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
                                 >
                                     <Send size={15} />
                                 </button>

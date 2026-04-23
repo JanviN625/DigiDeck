@@ -566,29 +566,21 @@ describe('Header — reset workspace', () => { // [FR-003]
     it('clicking the Reset confirm button calls handleClearAllTracks', () => {
         render(<Header />);
         fireEvent.click(screen.getByTitle('Remove all tracks and start fresh'));
-        // The confirm button has text "Reset" inside the confirmation UI
-        const buttons = screen.getAllByRole('button', { name: 'Reset' });
-        // The confirmation Reset button is inside the "Reset workspace?" inline dialog
-        // eslint-disable-next-line testing-library/no-node-access
-        const confirmBtn = buttons.find(b => b.closest('[class*="animate-in"]'));
-        fireEvent.click(confirmBtn);
+        fireEvent.click(screen.getByRole('button', { name: 'Yes' }));
         expect(mockHandleClearAllTracks).toHaveBeenCalledTimes(1);
     });
 
     it('clicking Cancel hides the confirm UI', () => {
         render(<Header />);
         fireEvent.click(screen.getByTitle('Remove all tracks and start fresh'));
-        fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+        fireEvent.click(screen.getByRole('button', { name: 'No' }));
         expect(screen.queryByText('Reset workspace?')).not.toBeInTheDocument();
     });
 
     it('after confirming reset, "Reset workspace?" text is gone', () => {
         render(<Header />);
         fireEvent.click(screen.getByTitle('Remove all tracks and start fresh'));
-        const buttons = screen.getAllByRole('button', { name: 'Reset' });
-        // eslint-disable-next-line testing-library/no-node-access
-        const confirmBtn = buttons.find(b => b.closest('[class*="animate-in"]'));
-        fireEvent.click(confirmBtn);
+        fireEvent.click(screen.getByRole('button', { name: 'Yes' }));
         expect(screen.queryByText('Reset workspace?')).not.toBeInTheDocument();
     });
 });

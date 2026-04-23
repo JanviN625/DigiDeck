@@ -133,6 +133,9 @@ export function AppProviders({ children }) {
     // Tracks which project slot is currently active so uploads route to the correct
     // per-slot subcollection. null = no project loaded (fresh workspace).
     const [activeSlotId, setActiveSlotId] = useState(null);
+    const [chats, setChats] = useState([]);
+    const [activeChatId, setActiveChatId] = useState(null);
+
     const [universalIsPlaying, setUniversalIsPlaying] = useState(false);
     const [masterStopSignal, setMasterStopSignal] = useState(0);
     const [globalZoom, setGlobalZoom] = useState(0);
@@ -357,6 +360,8 @@ export function AppProviders({ children }) {
             if (!skipHistory) commitHistory(next);
             return next;
         });
+        setChats([]);
+        setActiveChatId(null);
     }, [commitHistory, setTracks]);
 
     const handleOverwriteTracks = useCallback((newTracksArray, skipHistory = false) => {
@@ -367,7 +372,7 @@ export function AppProviders({ children }) {
     }, [commitHistory, setTracks]);
 
     // Restores a full project snapshot atomically — used by Header on project load.
-    const handleOverwriteWorkspace = useCallback(({ tracks: newTracks, masterBpm: newBpm, globalZoom: newZoom }) => {
+    const handleOverwriteWorkspace = useCallback(({ tracks: newTracks, masterBpm: newBpm, globalZoom: newZoom, chats: newChats, activeChatId: newChatId }) => {
         if (Array.isArray(newTracks)) {
             setTracks(prev => {
                 commitHistory(newTracks);
@@ -376,6 +381,8 @@ export function AppProviders({ children }) {
         }
         if (newBpm !== undefined) setMasterBpm(newBpm);
         if (newZoom !== undefined) setGlobalZoom(newZoom);
+        if (newChats !== undefined) setChats(newChats);
+        if (newChatId !== undefined) setActiveChatId(newChatId);
     }, [commitHistory, setTracks, setMasterBpm, setGlobalZoom]);
 
     const masterDuration = useMemo(() => {
@@ -397,7 +404,14 @@ export function AppProviders({ children }) {
                 const now = performance.now();
                 masterTimeRef.current += (now - lastTickRef.current) / 1000;
                 lastTickRef.current = now;
-                handle = requestAnimationFrame(tick);
+
+                if (masterTimeRef.current >= masterDuration && masterDuration > 0) {
+                    masterTimeRef.current = masterDuration;
+                    setUniversalIsPlaying(false);
+                    triggerMasterStop();
+                } else {
+                    handle = requestAnimationFrame(tick);
+                }
             }
         };
         if (universalIsPlaying) {
@@ -405,7 +419,7 @@ export function AppProviders({ children }) {
             handle = requestAnimationFrame(tick);
         }
         return () => cancelAnimationFrame(handle);
-    }, [universalIsPlaying]);
+    }, [universalIsPlaying, masterDuration, triggerMasterStop]);
 
     const handleSeekMaster = useCallback((timeSec) => {
         masterTimeRef.current = timeSec;
@@ -413,7 +427,7 @@ export function AppProviders({ children }) {
 
     return (
         <SpotifyContext.Provider value={{ ...SpotifyService }}>
-            <MixContext.Provider value={{ tracks, getLiveTracks, handleAddTrack, handleDuplicateTrack, handleDeleteTrack, handleMoveTrack, handleUpdateTrack, handleUpdateTrackDuration, handleClearAllTracks, handleOverwriteTracks, handleOverwriteWorkspace, trackLimitError, setTrackLimitError, storageError, currentUid, universalIsPlaying, setUniversalIsPlaying, masterStopSignal, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleUndo, handleRedo, commitCurrentState, canUndo: historyState.index > 0, canRedo: historyState.index < historyState.list.length - 1, isLibraryCollapsed, setIsLibraryCollapsed, isAICollapsed, setIsAICollapsed, activeSlotId, setActiveSlotId }}>
+            <MixContext.Provider value={{ tracks, getLiveTracks, handleAddTrack, handleDuplicateTrack, handleDeleteTrack, handleMoveTrack, handleUpdateTrack, handleUpdateTrackDuration, handleClearAllTracks, handleOverwriteTracks, handleOverwriteWorkspace, trackLimitError, setTrackLimitError, storageError, currentUid, universalIsPlaying, setUniversalIsPlaying, masterStopSignal, triggerMasterStop, globalZoom, setGlobalZoom, masterBpm, setMasterBpm, masterDuration, masterTimeRef, handleSeekMaster, handleUndo, handleRedo, commitCurrentState, canUndo: historyState.index > 0, canRedo: historyState.index < historyState.list.length - 1, isLibraryCollapsed, setIsLibraryCollapsed, isAICollapsed, setIsAICollapsed, activeSlotId, setActiveSlotId, chats, setChats, activeChatId, setActiveChatId }}>
                 {children}
             </MixContext.Provider>
         </SpotifyContext.Provider>

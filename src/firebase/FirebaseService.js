@@ -9,7 +9,8 @@ import {
   query,
   serverTimestamp
 } from 'firebase/firestore';
-import { db } from './firebaseConfig';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, storage } from './firebaseConfig';
 
 const FirebaseService = {
   async savePlaylist(spotifyUserId, playlistId, playlistData) {
@@ -96,7 +97,18 @@ const FirebaseService = {
   async saveProjectSlot(uid, slotId, projectData, isNewSlot) {
     const ref = doc(db, 'users', uid, 'projectSlots', slotId);
     const { tracks = [], ...rest } = projectData;
-    const serialized = tracks.map(({ audioBlob, ...track }) => track);
+    
+    const serialized = await Promise.all(tracks.map(async (track) => {
+      const { audioBlob, ...restTrack } = track;
+      if (audioBlob) {
+        const fileRef = storageRef(storage, `users/${uid}/projectSlots/${slotId}/${track.id}.wav`);
+        await uploadBytes(fileRef, audioBlob);
+        const url = await getDownloadURL(fileRef);
+        return { ...restTrack, audioUrl: url };
+      }
+      return restTrack;
+    }));
+
     const data = {
       ...rest,
       tracks: serialized,
