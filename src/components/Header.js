@@ -31,7 +31,8 @@ export default function Header() {
         handleUpdateTrack, handleClearAllTracks, handleOverwriteWorkspace,
         handleUndo, handleRedo,
         isLibraryCollapsed, setIsLibraryCollapsed, isAICollapsed, setIsAICollapsed,
-        setActiveSlotId,
+        setActiveSlotId, chats, activeChatId,
+        masterTimeRef, masterDuration,
     } = useMix();
 
     const handleSyncAllTracks = useCallback(() => {
@@ -115,6 +116,8 @@ export default function Header() {
                     globalZoom,
                     libraryCollapsed: isLibraryCollapsed,
                     aiCollapsed: isAICollapsed,
+                    chats,
+                    activeChatId,
                 },
                 !existingProject // isNewSlot
             );
@@ -129,7 +132,7 @@ export default function Header() {
         } finally {
             setIsSavingSlot(false);
         }
-    }, [user, projectName, tracks, masterBpm, globalZoom, isLibraryCollapsed, isAICollapsed, isSavingSlot, setActiveSlotId, closeModal]);
+    }, [user, projectName, tracks, masterBpm, globalZoom, isLibraryCollapsed, isAICollapsed, chats, activeChatId, isSavingSlot, setActiveSlotId, closeModal]);
 
     const handleLoadFromSlot = useCallback(async (slotId) => {
         if (!user?.uid) return;
@@ -141,6 +144,8 @@ export default function Header() {
                 tracks: project.tracks ?? [],
                 masterBpm: project.masterBpm,
                 globalZoom: project.globalZoom,
+                chats: project.chats ?? [],
+                activeChatId: project.activeChatId ?? null,
             });
             if (typeof project.libraryCollapsed === 'boolean') setIsLibraryCollapsed(project.libraryCollapsed);
             if (typeof project.aiCollapsed === 'boolean') setIsAICollapsed(project.aiCollapsed);
@@ -168,13 +173,23 @@ export default function Header() {
 
     // ── Keybinds ─────────────────────────────────────────────────────────────
 
+    const togglePlay = useCallback(() => {
+        setUniversalIsPlaying(v => {
+            if (!v && masterTimeRef.current >= masterDuration && masterDuration > 0) {
+                masterTimeRef.current = 0;
+            }
+            return !v;
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [setUniversalIsPlaying, masterDuration]);
+
     useEffect(() => {
         const handleKeydown = (e) => {
             const tag = document.activeElement?.tagName;
             if (tag === 'INPUT' || tag === 'TEXTAREA' || document.activeElement?.isContentEditable) return;
             if (matchesKeybind(e, settings.keybinds.playPause)) {
                 e.preventDefault();
-                setUniversalIsPlaying(v => !v);
+                togglePlay();
             }
             if (matchesKeybind(e, settings.keybinds.saveProject)) {
                 e.preventDefault();
@@ -191,7 +206,7 @@ export default function Header() {
         };
         window.addEventListener('keydown', handleKeydown);
         return () => window.removeEventListener('keydown', handleKeydown);
-    }, [settings.keybinds, setUniversalIsPlaying, handleOpenSave, handleUndo, handleRedo]);
+    }, [settings.keybinds, togglePlay, handleOpenSave, handleUndo, handleRedo]);
 
     const handleExport = useCallback(async () => {
         if (renderingFor) return;
@@ -296,7 +311,7 @@ export default function Header() {
                 <div className="flex justify-center min-w-0 pointer-events-none">
                     <div className="flex items-center gap-1 bg-base-900/60 border border-base-700 rounded-lg px-2 py-1.5 pointer-events-auto">
                     <button
-                        onClick={() => setUniversalIsPlaying(v => !v)}
+                        onClick={togglePlay}
                         className={`w-7 h-7 rounded-md flex items-center justify-center transition-colors ${
                             universalIsPlaying
                                 ? 'text-base-450 bg-base-450/15'
@@ -383,27 +398,29 @@ export default function Header() {
             {/* Right — actions + avatar */}
             <div className="flex items-center gap-3 flex-1 justify-end">
                 <div className="flex items-center gap-0.5">
-                    <button onClick={handleOpenSave} className="relative text-sm font-medium px-3 py-1.5 rounded-md transition-colors w-16 text-center select-none group">
-                        <span className={`block transition-opacity duration-200 ${saveAlert || saveError ? 'opacity-0' : 'opacity-100 text-base-400 group-hover:text-base-100 group-hover:bg-base-700/60'}`}>Save</span>
+                    <button onClick={handleOpenSave} className="relative text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors w-16 text-center select-none group">
+                        <span className={`block transition-opacity duration-200 ${saveAlert || saveError ? 'opacity-0' : 'opacity-100'}`}>Save</span>
                         <span className={`block text-positive-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveAlert ? 'opacity-100' : 'opacity-0'}`}>Saved!</span>
                         <span className={`block text-danger-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-200 whitespace-nowrap ${saveError ? 'opacity-100' : 'opacity-0'}`}>Failed</span>
                     </button>
                     <button onClick={handleOpenLoad} className="text-sm text-base-400 hover:text-base-100 hover:bg-base-700/60 px-3 py-1.5 rounded-md transition-colors">Load</button>
                     {showResetConfirm ? (
-                        <div className="flex items-center gap-1.5 animate-in fade-in duration-150">
-                            <span className="text-xs text-base-400">Reset workspace?</span>
-                            <button
-                                onClick={() => { handleClearAllTracks(); setShowResetConfirm(false); }}
-                                className="text-xs font-semibold text-danger-400 hover:text-danger-300 px-2 py-0.5 rounded bg-danger-900/20 hover:bg-danger-900/40 transition-colors"
-                            >
-                                Reset
-                            </button>
-                            <button
-                                onClick={() => setShowResetConfirm(false)}
-                                className="text-xs text-base-500 hover:text-base-300 px-2 py-0.5 rounded transition-colors"
-                            >
-                                Cancel
-                            </button>
+                        <div className="flex items-center gap-2 animate-in fade-in duration-150 bg-base-800 border border-base-700 rounded-md h-8 px-2">
+                            <span className="text-xs text-base-300 mt-px">Reset workspace?</span>
+                            <div className="flex items-center gap-0.5">
+                                <button
+                                    onClick={() => { handleClearAllTracks(); setShowResetConfirm(false); }}
+                                    className="text-xs font-medium text-danger-400 hover:text-danger-200 hover:bg-danger-900/30 px-2 py-1 rounded transition-colors"
+                                >
+                                    Yes
+                                </button>
+                                <button
+                                    onClick={() => setShowResetConfirm(false)}
+                                    className="text-xs font-medium text-base-400 hover:text-base-200 hover:bg-base-700/50 px-2 py-1 rounded transition-colors"
+                                >
+                                    No
+                                </button>
+                            </div>
                         </div>
                     ) : (
                         <button

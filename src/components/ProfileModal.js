@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X, User, Camera, CheckCircle, AlertCircle, Loader } from 'lucide-react';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase/firebaseConfig';
 import { useFirebaseAuth, friendlyError } from '../firebase/firebase';
 import { useSettings, formatKeybind } from '../utils/useSettings';
@@ -9,7 +9,7 @@ import { useSpotifyConnect } from '../spotify/appContext';
 // ─── AccountModal ─────────────────────────────────────────────────────────────
 
 export function AccountModal({ isOpen, onClose }) {
-  const { user, updateDisplayName, updateProfilePhoto, removeProfilePhoto, updateUserEmail } = useFirebaseAuth();
+  const { user, updateDisplayName, updateProfilePhoto, removeProfilePhoto } = useFirebaseAuth();
   const { isSpotifyConnected, connectSpotify, disconnectSpotify } = useSpotifyConnect();
   const { settings } = useSettings();
   const animClass = settings.animationsEnabled ? 'animate-in fade-in zoom-in-95 duration-200' : '';
@@ -27,11 +27,7 @@ export function AccountModal({ isOpen, onClose }) {
   const [displayNameSuccess, setDisplayNameSuccess] = useState(false);
   const [displayNameError, setDisplayNameError] = useState('');
 
-  // Email
-  const [newEmail, setNewEmail] = useState('');
-  const [emailSaving, setEmailSaving] = useState(false);
-  const [emailSuccess, setEmailSuccess] = useState(false);
-  const [emailError, setEmailError] = useState('');
+
 
   // Account details
   const [accountDetails, setAccountDetails] = useState(null);
@@ -40,8 +36,6 @@ export function AccountModal({ isOpen, onClose }) {
   useEffect(() => {
     if (!isOpen || !user) return;
     setDisplayName(user.displayName || '');
-    setNewEmail(user.email || '');
-    setEmailSuccess(false); setEmailError('');
     setDisplayNameSuccess(false); setDisplayNameError('');
     setPhotoError('');
 
@@ -93,20 +87,7 @@ export function AccountModal({ isOpen, onClose }) {
     }
   };
 
-  const handleSaveEmail = async () => {
-    if (!newEmail.trim()) { setEmailError('Email cannot be empty.'); return; }
-    setEmailSaving(true);
-    setEmailError('');
-    try {
-      await updateUserEmail(newEmail.trim());
-      setEmailSuccess(true);
-      setTimeout(() => setEmailSuccess(false), 2500);
-    } catch (err) {
-      setEmailError(friendlyError(err));
-    } finally {
-      setEmailSaving(false);
-    }
-  };
+
 
   if (!isOpen) return null;
 
@@ -207,47 +188,17 @@ export function AccountModal({ isOpen, onClose }) {
           {/* Email */}
           <div className="border-b border-base-800 pb-6">
             <label className="block text-xs font-medium text-base-400 mb-2">Email</label>
-            {isGoogleUser ? (
-              <div className="flex items-center gap-3">
-                <input
-                  type="email"
-                  value={user?.email || ''}
-                  disabled
-                  className="flex-1 bg-base-800 border border-base-700 rounded-lg px-3 py-2 text-sm text-base-400 outline-none opacity-60 cursor-not-allowed"
-                />
+            <div className="flex items-center gap-3">
+              <input
+                type="email"
+                value={user?.email || ''}
+                disabled
+                className="flex-1 bg-base-800 border border-base-700 rounded-lg px-3 py-2 text-sm text-base-400 outline-none opacity-60 cursor-not-allowed"
+              />
+              {isGoogleUser && (
                 <span className="text-xs text-base-500 bg-base-800 border border-base-700 px-2 py-1 rounded-md whitespace-nowrap">Managed by Google</span>
-              </div>
-            ) : (
-              <>
-                <div className="flex gap-2">
-                  <input
-                    type="email"
-                    value={newEmail}
-                    onChange={(e) => setNewEmail(e.target.value)}
-                    autoComplete="email"
-                    className="flex-1 bg-base-800 border border-base-700 rounded-lg px-3 py-2 text-sm text-base-50 outline-none focus:border-base-500 transition-colors"
-                  />
-                  <button
-                    onClick={handleSaveEmail}
-                    disabled={emailSaving}
-                    className="px-4 py-2 text-sm font-medium bg-base-700 hover:bg-base-600 text-base-100 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
-                  >
-                    {emailSaving ? <Loader size={13} className="animate-spin" /> : null}
-                    Save
-                  </button>
-                </div>
-                {emailSuccess && (
-                  <p className="flex items-center gap-1.5 mt-2 text-xs text-positive-400">
-                    <CheckCircle size={13} /> Email updated.
-                  </p>
-                )}
-                {emailError && (
-                  <p className="flex items-center gap-1.5 mt-2 text-xs text-danger-400">
-                    <AlertCircle size={13} /> {emailError}
-                  </p>
-                )}
-              </>
-            )}
+              )}
+            </div>
           </div>
 
           {/* Account Details */}
@@ -307,6 +258,7 @@ const ACTIONS = [
 ];
 
 export function SettingsModal({ isOpen, onClose }) {
+  const { user } = useFirebaseAuth();
   const { settings, updateSetting } = useSettings();
   const animClass = settings.animationsEnabled ? 'animate-in fade-in zoom-in-95 duration-200' : '';
   const [activeTab, setActiveTab] = useState('general');
@@ -413,6 +365,29 @@ export function SettingsModal({ isOpen, onClose }) {
                   <Toggle value={settings[key]} onChange={(v) => updateSetting(key, v)} />
                 </div>
               ))}
+
+              <div className="flex items-center justify-between py-3 border-b border-base-800">
+                <span className="text-sm text-base-200">AI Experience Level</span>
+                <select
+                  value={settings.experienceLevel || ''}
+                  onChange={async (e) => {
+                    const val = e.target.value;
+                    updateSetting('experienceLevel', val);
+                    if (user?.uid) {
+                      try { await updateDoc(doc(db, 'users', user.uid), { experienceLevel: val }); }
+                      catch (err) { console.error("Error saving to Firebase", err); }
+                    }
+                  }}
+                  className="bg-base-800 border border-base-700 text-sm text-base-200 rounded-md px-2 py-1 outline-none focus:border-base-500"
+                >
+                  <option value="" disabled>Select level...</option>
+                  <option value="beginner">Absolute Beginner</option>
+                  <option value="novice">Novice</option>
+                  <option value="intermediate">Intermediate</option>
+                  <option value="proficient">Proficient</option>
+                  <option value="advanced">Advanced</option>
+                </select>
+              </div>
             </div>
           )}
 
@@ -473,8 +448,8 @@ export function SettingsModal({ isOpen, onClose }) {
                 <p className="text-base font-bold text-base-50">DigiDeck Studio</p>
                 <p className="text-xs text-base-500 mt-0.5">Version 0.1.0</p>
               </div>
-              <p className="text-sm text-base-400 max-w-xs">
-                A browser-based audio mixing studio for DJs and music producers.
+              <p className="text-sm text-base-300 max-w-sm mt-2 leading-relaxed">
+                A highly advanced, completely local, browser-based audio mixing studio tailored for DJs, mashup artists, and producers. DigiDeck lets you mix tracks, extract stems, sync beats seamlessly, and utilize complex DSP effects directly in your web browser—without needing any expensive desktop DAW!
               </p>
             </div>
           )}
