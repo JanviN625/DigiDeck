@@ -1,4 +1,7 @@
 {
+  "overrides": {
+    "yaml": "2.8.3"
+  },
   "name": "digideck",
   "version": "0.1.0",
   "private": true,
