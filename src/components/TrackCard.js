@@ -856,34 +856,38 @@ export default function TrackCard({
     }, [bpm, masterBpm, trackId]);
 
     // Split track at playhead position — inserts a cut point into the segments array.
-    // Cut snaps to the nearest beat/half-beat when Essentia data is available.
     const handleSplit = useCallback(() => {
         if (!audioUrl || !waveformReadyRef.current || !wavesurferRef.current) return;
         const duration = durationRef.current;
         if (!duration) return;
 
-        let timeSec = wavesurferRef.current.getCurrentTime();
-
-        const pct = timeSec / duration;
+        // Capture pct ONCE — stays stable across the sync state update + re-render cycle.
+        let pct = currentTimePctRef.current;
+        if (!pct) pct = wavesurferRef.current.getCurrentTime() / duration;
         if (pct <= 0 || pct >= 1) return;
-        setSegments(prev => {
-            // >= for startPct so a split right after an existing cut point (where
-            // pct === seg.startPct) correctly targets the segment to the right.
-            const idx = prev.findIndex(seg => pct >= seg.startPct && pct < seg.endPct);
-            if (idx === -1) return prev;
-            const seg = prev[idx];
-            // Propagate masterTimePct: right half inherits its position within master timeline
-            const rightMasterTimePct = seg.masterTimePct !== null && masterDuration > 0
-                ? seg.masterTimePct + (pct - seg.startPct) * audioDuration / masterDuration
-                : null;
-            const next = [...prev];
-            next.splice(idx, 1,
-                { ...seg, startPct: seg.startPct, endPct: pct, fadeOut: 0 },
-                { ...seg, id: Date.now(), startPct: pct, endPct: seg.endPct, fadeIn: 0, masterTimePct: rightMasterTimePct }
-            );
-            handleUpdateTrack(trackId, { initialSegments: next });
-            return next;
-        });
+
+        const prev = segmentsRef.current;
+        const idx = prev.findIndex(seg => pct >= seg.startPct && pct < seg.endPct);
+        if (idx === -1) return;
+
+        const seg = prev[idx];
+        const rightMasterTimePct = seg.masterTimePct !== null && masterDuration > 0
+            ? seg.masterTimePct + (pct - seg.startPct) * audioDuration / masterDuration
+            : null;
+        const next = [...prev];
+        next.splice(idx, 1,
+            { ...seg, endPct: pct, fadeOut: 0 },
+            { ...seg, id: Date.now(), startPct: pct, endPct: seg.endPct, fadeIn: 0, masterTimePct: rightMasterTimePct }
+        );
+
+        // Apply state before persisting so UI is instant.
+        setSegments(next);
+        handleUpdateTrack(trackId, { initialSegments: next });
+
+        // Re-anchor wavesurfer to the exact pre-split position so the re-render
+        // cycle triggered by handleUpdateTrack cannot drift the playhead.
+        wavesurferRef.current.seekTo(Math.min(1, Math.max(0, pct)));
+        currentTimePctRef.current = pct;
     }, [audioUrl, handleUpdateTrack, trackId, masterDuration, audioDuration]);
 
     // eslint-disable-next-line no-unused-vars
@@ -1382,10 +1386,29 @@ export default function TrackCard({
                     }).filter(Boolean);
                     effectsRef.current = newEffects;
 
+                    // Apply segment muting first — must be outside the activeSegmentId guard
+                    // so it always fires on boundary crossing (the inner guard skips UI sync when
+                    // activeSegmentId already tracks the playing segment).
+                    const segMuted = playingSeg.isDeleted || playingSeg.isMuted || false;
+                    isSegmentMutedRef.current = segMuted;
+                    if (!isMutedRef.current && isVisibleRef.current) {
+                        if (!segMuted) {
+                            // Entering an unmuted segment — cancel any scheduled gain automation
+                            // (e.g. from a previous mute or fade-out) before restoring volume.
+                            const t = AudioEngineService.tracks.get(trackId);
+                            if (t) {
+                                t.gain.gain.cancelScheduledValues(AudioEngineService.ctx.currentTime);
+                                t.gain.gain.setValueAtTime(t.targetVolume ?? (volumeRef.current / 100), AudioEngineService.ctx.currentTime);
+                            }
+                        }
+                        setEngVolume(segMuted ? 0 : volumeRef.current / 100);
+                    }
+
                     if (playingSeg.fadeIn > 0) {
                         applyFadeIn(playingSeg.fadeIn);
-                    } else {
-                        // Restore gain in case the previous segment faded out
+                    } else if (!segMuted) {
+                        // Restore gain in case the previous segment faded out (only for unmuted
+                        // segments — muted segments already set gain to 0 above).
                         const t = AudioEngineService.tracks.get(trackId);
                         if (t) {
                             t.gain.gain.cancelScheduledValues(AudioEngineService.ctx.currentTime);
@@ -1405,10 +1428,6 @@ export default function TrackCard({
                         setEqHigh(playingSeg.eqHigh);
                         setEqKills(playingSeg.eqKills || { low: false, mid: false, high: false });
                         setEffects(newEffects);
-                        // Apply segment muting directly — avoids triggering the volume useEffect mid-playback
-                        const segMuted = playingSeg.isDeleted || playingSeg.isMuted || false;
-                        isSegmentMutedRef.current = segMuted;
-                        if (!isMutedRef.current && isVisibleRef.current) setEngVolume(segMuted ? 0 : volumeRef.current / 100);
                     }
                 }
 
@@ -1442,10 +1461,27 @@ export default function TrackCard({
         const toWidth = (pct) => `${pct * 100}%`;
 
         return segments.map(seg => {
-            if (seg.isDeleted || seg.isMuted) return null;
+            // For muted segments: render a mute overlay (hatching) but skip other effects
+            if (seg.isDeleted) return null;
 
             const segL = toLeft(seg.startPct);
             const segW = toWidth(seg.endPct - seg.startPct);
+
+            if (seg.isMuted) {
+                return (
+                    <div key={`segfx-${seg.id}`}
+                        className="absolute top-0 bottom-0 pointer-events-none z-[5]"
+                        style={{ left: segL, width: segW }}>
+                        {/* Muted region — cross-hatch pattern + VolumeX icon overlay */}
+                        <div className="absolute inset-0" style={{
+                            backgroundImage: 'repeating-linear-gradient(135deg, rgba(8,10,14,0.20) 0px, rgba(8,10,14,0.20) 2px, transparent 2px, transparent 8px)',
+                        }} />
+                        <div className="absolute inset-0 flex items-center justify-center opacity-40 pointer-events-none">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-base-200"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+                        </div>
+                    </div>
+                );
+            }
 
             const fx    = seg.effects || [];
             const volFx = fx.find(e => e.type === 'volume' && e.enabled);
@@ -1715,17 +1751,35 @@ export default function TrackCard({
                                 {isPlaying ? <Pause size={14} /> : <Play size={14} className="ml-0.5" />}
                             </button>
                             <button
-                                onClick={(e) => { e.stopPropagation(); setIsMuted(!isMuted); }}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (segments.length > 1) {
+                                        // Multi-segment: mute only the active segment
+                                        const activeSeg = segmentsRef.current?.find(s => s.id === activeSegmentIdRef.current);
+                                        if (!activeSeg) return;
+                                        const next = !activeSeg.isMuted;
+                                        syncActiveSegmentSettings({ isMuted: next });
+                                        const segMuted = activeSeg.isDeleted || next;
+                                        if (!isMutedRef.current && isVisibleRef.current) setEngVolume(segMuted ? 0 : volumeRef.current / 100);
+                                    } else {
+                                        // Single segment: mute the whole track as before
+                                        setIsMuted(!isMuted);
+                                    }
+                                }}
                                 disabled={!isVisible}
                                 className={`flex-1 aspect-square rounded flex items-center justify-center transition-colors border font-bold text-xs gap-1 ${
                                     !isVisible
                                         ? 'bg-base-900 text-base-700 border-base-800 cursor-not-allowed'
-                                        : isMuted
+                                        : (segments.length > 1
+                                            ? (segments.find(s => s.id === activeSegmentId)?.isMuted)
+                                            : isMuted)
                                             ? 'bg-mark text-mark-fg border-mark-border shadow-mark'
                                             : 'bg-base-900 text-base-300 border-base-700 hover:text-base-50 hover:border-base-500'
                                 }`}
                             >
-                                {isMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+                                {(segments.length > 1
+                                    ? (segments.find(s => s.id === activeSegmentId)?.isMuted)
+                                    : isMuted) ? <VolumeX size={14} /> : <Volume2 size={14} />}
                             </button>
                             <button
                                 onClick={(e) => { e.stopPropagation(); setIsVisible(!isVisible); }}
@@ -2018,6 +2072,36 @@ export default function TrackCard({
                 {/* Collapsible Settings panel — toggle button lives in the bar above */}
                 {isExpanded && isSettingsExpanded && (
                     <div className={`w-full bg-base-900 rounded-lg p-5 border border-base-700 flex flex-col gap-6 transition-opacity ${!isVisible ? 'opacity-50 pointer-events-none' : ''}`} onClick={(e) => e.stopPropagation()}>
+
+                                {/* Segment indicator — shows which segment's settings are active */}
+                                {segments.length > 1 && (() => {
+                                    const activeSeg = segments.find(s => s.id === activeSegmentId);
+
+                                    return (
+                                        <div className="flex items-center gap-2 pb-1 border-b border-base-700/60">
+                                            <span className="text-xs font-bold text-base-400 uppercase tracking-wider">Editing:</span>
+                                            <div className="flex gap-1">
+                                                {segments.map((seg, idx) => (
+                                                    <button
+                                                        key={seg.id}
+                                                        onClick={(e) => { e.stopPropagation(); activateSegmentRef.current?.(seg.id); }}
+                                                        className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold transition-colors
+                                                            ${seg.id === activeSegmentId
+                                                                ? 'bg-base-500 text-base-50'
+                                                                : 'bg-base-800 text-base-400 hover:text-base-100 hover:bg-base-700'}
+                                                            ${seg.isMuted ? 'ring-1 ring-caution-400/60' : ''}`}
+                                                        title={`Switch to Segment ${idx + 1}${seg.isMuted ? ' (muted)' : ''}`}
+                                                    >
+                                                        {idx + 1}{seg.isMuted ? 'M' : ''}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                            {activeSeg?.isMuted && (
+                                                <span className="text-[11px] text-caution-400 font-semibold ml-1">· muted</span>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
 
                                 <div className="grid grid-cols-2 gap-8 pt-2">
                                     {/* Fades */}
